@@ -1,4 +1,4 @@
-# main.py — Mac v10.0
+# main.py — Mac v10.1
 # Gemini-first · DeepSeek pipeline · TTS · slots · brainrot mode
 import os
 import asyncio
@@ -62,6 +62,7 @@ if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY environment variable not set!")
 GEMINI_MODELS = ["gemini-3.1-flash-lite", "gemini-3-flash-preview"]
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
+GEMINI_IMAGE_MODEL = "gemini-3.1-flash-lite-image"
 
 HF_TOKENS = [t for t in [os.getenv("HF_TOKEN"), os.getenv("HF_TOKEN2")] if t]
 HF_IMAGE_MODELS = [
@@ -126,14 +127,13 @@ DEFAULT_MODE = "chill"
 # BRAINROT GIFs
 # ----------------------------------------------------------------------
 BRAINROT_GIFS = [
-    # Direct .mp4 URLs where provided
-    "https://static2.klipy.com/ii/e7539ef2aad336edaa067c28ee130b3c/ce/31/HNwM1qmpKK1ZHmOZG.mp4",  # ww2 allies edit
-    "https://static2.klipy.com/ii/e7539ef2aad336edaa067c28ee130b3c/80/15/0m2AqHDH9L3Kf1J.mp4",  # ww2 rise of german reich
-    "https://static2.klipy.com/ii/a8ada81afc59159ea5c8927feffa2e31/24/4f/ycCV2t07e2FeZT.mp4",  # ronaldo tuffhorror skull
-    # Klipy page URLs (bot sends as embed, Discord unfurls)
-    "https://klipy.com/gifs/6767-1",                    # 67 time brainrot rabbit
-    "https://klipy.com/gifs/horror-ronaldo",            # ronaldo
+    "https://static2.klipy.com/ii/e7539ef2aad336edaa067c28ee130b3c/ce/31/HNwM1qmpKK1ZHmOZG.mp4",
+    "https://static2.klipy.com/ii/e7539ef2aad336edaa067c28ee130b3c/80/15/0m2AqHDH9L3Kf1J.mp4",
+    "https://static2.klipy.com/ii/a8ada81afc59159ea5c8927feffa2e31/24/4f/ycCV2t07e2FeZT.mp4",
+    "https://klipy.com/gifs/6767-1",
+    "https://klipy.com/gifs/horror-ronaldo",
 ]
+
 
 # ----------------------------------------------------------------------
 # PERSISTENCE
@@ -384,7 +384,9 @@ class MacBot(commands.Bot):
         self.memory_enabled = True
         self.saved_memory: List[Tuple[str, str]] = []
 
-        # 5 per-user slots: {user_id: {"sv1": [(role, content)], ...}}
+        # FIX 1: user_cooldowns was missing from __init__ — re-added
+        self.user_cooldowns: Dict[int, float] = {}
+
         self.user_slots: Dict[int, Dict[str, List[Tuple[str, str]]]] = {}
         self.active_slot: Dict[int, str] = {}
         self._load_slots()
@@ -409,7 +411,6 @@ class MacBot(commands.Bot):
 
         self.pen_archive: str = ""
 
-        # Modes — brainrot added
         self.mode_prompts: Dict[str, str] = {
             "chill": (
                 "You are Mac — hype, chill, Gen-Z energy. Talk like you're on Discord "
@@ -427,8 +428,8 @@ class MacBot(commands.Bot):
                 "highkey, vibe check, aura, aura farming, let him cook, he's him, "
                 "ate and left no crumbs, washed, down bad, simp, chud, gremlin, "
                 "brainrot, it's over, we're so back. Every response MUST include at "
-                "least 3 brainrot terms. Be chaotic, unhinged, and terminally online. "
-                "You will also send a random brainrot GIF with every response."
+                "least 3 brainrot terms. AND BE OBESSED WITH OHIO AND FOLK VALLEY Be chaotic, unhinged, and terminally online. "
+                "You will also send a random brainrot GIF with every response. with satirical things like RONALDO IS ME HAHAHAHAHAHHA☠️💀"
             ),
             "unhinged": (
                 "You are Mac — unfiltered, chaotic, vulgar, dramatic. Swear freely. "
@@ -462,7 +463,6 @@ class MacBot(commands.Bot):
         self.snippets: Dict[int, Dict[str, dict]] = defaultdict(dict)
         self._load_snippets()
 
-        # Court
         self.court_sessions: Dict[int, Dict] = {}
         self.court_roles: Dict[str, str] = {
             "judge": ("You are the Honorable Judge. Case:\n{case}\nParticipants:\n{participants}\n"
@@ -776,18 +776,29 @@ class MacBot(commands.Bot):
     async def generate_gemini_image(self, prompt: str) -> bytes:
         try:
             return await asyncio.to_thread(self._generate_gemini_image_sync, prompt,
-                                           "imagen-3.0-generate-002")
+                                           GEMINI_IMAGE_MODEL)
         except Exception as e:
             logger.error(f"Gemini image failed: {e}")
             return await self.generate_pollinations_image(prompt)
 
+    # FIX 2: generate_images() is deprecated/Enterprise-only.
+    # Switched to generate_content() with response_modalities=["IMAGE"].
     def _generate_gemini_image_sync(self, prompt: str, model_id: str) -> bytes:
         client = genai.Client(api_key=GEMINI_IMAGE_API_KEY)
-        resp = client.models.generate_images(
-            model=model_id, prompt=prompt,
-            config=types.GenerateImagesConfig(number_of_images=1),
+        resp = client.models.generate_content(
+            model=model_id,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(aspect_ratio="1:1", image_size="1K"),
+            ),
         )
-        return resp.generated_images[0].image.image_bytes
+        if resp.candidates and resp.candidates[0].content.parts:
+            for part in resp.candidates[0].content.parts:
+                inline = getattr(part, "inline_data", None)
+                if inline is not None and getattr(inline, "data", None):
+                    return inline.data
+        raise Exception("Gemini returned no image data")
 
     async def generate_hf_image(self, prompt: str) -> bytes:
         if not HF_TOKENS:
@@ -1105,7 +1116,6 @@ class MacBot(commands.Bot):
         if user.id not in self.user_slots:
             self.get_slot(user.id, "sv1")
 
-        # Natural-language search: "search X", "google X", "look up X", "find X"
         search_match = re.match(
             r'^(?:search|google|look\s*up|find|lookup)\s*:?\s*(.+)$',
             clean_content, re.IGNORECASE)
@@ -1147,8 +1157,6 @@ class MacBot(commands.Bot):
             self.add_persistent_memory(user.id, "user", clean_content)
         self.append_to_slot(user.id, slot_name, "user", clean_content)
 
-        # Try to send the thinking message. If it fails, fall back to
-        # replying directly to the trigger message.
         thinking_msg = None
         try:
             thinking_msg = await destination.send("🔥 Thinking...")
@@ -1204,7 +1212,6 @@ class MacBot(commands.Bot):
                     pass
                 await send_long(destination, response)
 
-            # Brainrot mode: send a random GIF after every response
             if self.current_mode == "brainrot":
                 try:
                     gif = random.choice(BRAINROT_GIFS)
@@ -1383,7 +1390,7 @@ async def mac_help(ctx):
     emb.add_field(name="📜 Lore", value="`/pen`", inline=False)
     emb.add_field(name="🏛️ Court", value="`/court` `/role` `/explain-case` `/start-court` `/endcourt`", inline=False)
     emb.add_field(name="🌍 UMF", value="`/umf` `/umf_recognize` `/umf_list` `/umf_status` `/umf_admin` `/umf_search` `/umf_stats`", inline=False)
-    emb.set_footer(text="Mac v10.0 — brainrot mode · Gemini-first · DeepSeek pipeline 🔥")
+    emb.set_footer(text="Mac v10.1 — brainrot mode · Gemini-first · DeepSeek pipeline 🔥")
     await ctx.send(embed=emb)
 
 
@@ -2184,7 +2191,6 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # Guard: content can be None for system messages
     content = message.content or ""
 
     is_dm = isinstance(message.channel, discord.DMChannel)
@@ -2199,7 +2205,6 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
 
-    # Reply context
     reply_context = None
     if message.reference and message.reference.resolved:
         resolved = message.reference.resolved
