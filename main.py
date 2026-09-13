@@ -538,7 +538,7 @@ class MacBot(commands.Bot):
 
     # ---------------- archive ----------------
     async def load_pen_archive_async(self):
-        url = "https://raw.githubusercontent.com/Pen-123/archive-/refs/heads/main/archives.txt"
+        url = "https://raw.githubusercontent.com/unkownPen/MultiGPT/refs/heads/main/archives.txt"
         try:
             async with aiohttp.ClientSession() as s:
                 async with s.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
