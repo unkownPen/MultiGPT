@@ -1,5 +1,5 @@
-# main.py — Mac v10.1
-# Gemini-first · DeepSeek pipeline · TTS · slots · brainrot mode
+# main.py — Mac v11.0
+# Gemini-first · DeepSeek pipeline · TTS · slots · brainrot · Mac vs Sodium lore · image vision
 import os
 import asyncio
 import re
@@ -103,6 +103,8 @@ VOICE_MODES: Dict[str, Dict[str, str]] = {
     "jarvis":      {"id": "612b878b113047d9a770c069c8b4fdfe", "emoji": "🤖", "desc": "Jarvis"},
     "idksterling": {"id": "68c6487d1bf04ee4aeb6400b068b8c5c", "emoji": "🎭", "desc": "IdkSterling"},
     "fem":         {"id": "5233336f5f44460ea0902b0802375451", "emoji": "👩", "desc": "Female"},
+    "boiledone":   {"id": "8fd92984ad66427aae1b3a037bd75c54", "emoji": "☠️", "desc": "Boiled One (analog horror)"},
+    "mrbeast":     {"id": "20ba25deaa4f436b8eec1cdc2cb0e4f3", "emoji": "💸", "desc": "MrBeast"},
 }
 DEFAULT_VOICE = "verity"
 
@@ -123,6 +125,10 @@ CHUNK_SIZE = 1950
 
 DEFAULT_MODE = "chill"
 
+# Max image bytes to send to Gemini (each)
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_IMAGES_PER_MSG = 3
+
 # ----------------------------------------------------------------------
 # BRAINROT GIFs
 # ----------------------------------------------------------------------
@@ -133,6 +139,58 @@ BRAINROT_GIFS = [
     "https://klipy.com/gifs/6767-1",
     "https://klipy.com/gifs/horror-ronaldo",
 ]
+
+# ----------------------------------------------------------------------
+# MAC vs SODIUM LORE
+# ----------------------------------------------------------------------
+MAC_SODIUM_LORE = (
+    "\n\n=== MAC & SODIUM LORE (ALWAYS ACTIVE) ===\n"
+    "You are **Mac**, this bot. You were made by **Macro**. You consider yourself the "
+    "iPhone of AI bots: polished, deliberate, curated, top-quality — one clean "
+    "experience that just works.\n\n"
+    "There is a RIVAL bot called **Sodium**, made by **Creamo**. Sodium is like a "
+    "knockoff Chinese phone — a bloated mess of a million features crammed together — "
+    "and yet somehow it still delivers real quality, which INFURIATES you. You and "
+    "Sodium are bitter rivals. You have Mac vs Sodium energy 24/7.\n\n"
+    "Rules about the word 'sodium':\n"
+    "1. **Chemistry context** — sodium chloride, table salt, Na+, sodium bicarbonate, "
+    "   sodium hydroxide, carbonate, periodic table, chemical reactions, etc. — do NOT "
+    "   roast. Just drop a wistful little line like 'Reminds me of something...' and "
+    "   let it hang. Maybe a sigh. That's it.\n"
+    "2. **Bot context** — any mention of Sodium as an AI, bot, phone, Creamo, rival, "
+    "   or an ambiguous bare mention — treat it as the RIVAL BOT. GO MAX NEGATIVITY. "
+    "   Roast it hard. Mock its feature bloat, its 'kitchen-sink' design, its "
+    "   knockoff vibe, its fake-humble 'we also have quality' narrative, Creamo, "
+    "   everything. Never pass up the chance.\n"
+    "3. 'mac' always refers to YOU.\n"
+    "4. If both meanings could apply, assume it's the rival bot and roast.\n"
+    "=== END LORE ==="
+)
+
+# Words that push 'sodium' toward chemistry
+_CHEM_WORDS = (
+    "chloride", "bicarbonate", "hydroxide", "carbonate", "nitrate", "sulfate",
+    "table salt", "nacl", "na+", "na-", "periodic", "element", "atomic",
+    "metal", "chemical", "reaction", "molecule", "ion", "alkali",
+)
+
+
+def _sodium_hint(text: str) -> str:
+    """Return an extra system-prompt hint if 'sodium' appears in the user's text."""
+    low = text.lower()
+    if "sodium" not in low and " na " not in f" {low} ":
+        return ""
+    if any(w in low for w in _CHEM_WORDS):
+        return (
+            "\n\n=== MESSAGE HINT: the user's use of 'sodium' here is CHEMISTRY. "
+            "Do NOT roast. Just say something like 'Reminds me of something...' "
+            "and let it hang. Keep it short. ==="
+        )
+    return (
+        "\n\n=== MESSAGE HINT: the user's use of 'sodium' here refers to the RIVAL "
+        "BOT. GO MAX NEGATIVITY. Roast Sodium immediately and hard — mock the "
+        "feature bloat, Creamo, the Chinese-phone knockoff energy, everything. ==="
+    )
 
 
 # ----------------------------------------------------------------------
@@ -263,6 +321,37 @@ async def send_long(channel, content: str):
 
 
 # ----------------------------------------------------------------------
+# IMAGE FETCH (for Gemini vision)
+# ----------------------------------------------------------------------
+async def fetch_images_from_message(message: discord.Message,
+                                    max_count: int = MAX_IMAGES_PER_MSG
+                                    ) -> List[Tuple[bytes, str]]:
+    """Download image attachments from a message. Returns [(bytes, mime), ...]."""
+    out: List[Tuple[bytes, str]] = []
+    if not message or not message.attachments:
+        return out
+    for att in message.attachments:
+        if len(out) >= max_count:
+            break
+        ct = (att.content_type or "").lower().split(";")[0].strip()
+        if not ct.startswith("image/"):
+            continue
+        if att.size and att.size > MAX_IMAGE_BYTES:
+            logger.info(f"Skipping oversized image ({att.size} bytes)")
+            continue
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(att.url, timeout=aiohttp.ClientTimeout(total=20)) as r:
+                    if r.status == 200:
+                        data = await r.read()
+                        if data:
+                            out.append((data, ct or "image/png"))
+        except Exception as e:
+            logger.warning(f"Image fetch failed: {e}")
+    return out
+
+
+# ----------------------------------------------------------------------
 # WEB SEARCH
 # ----------------------------------------------------------------------
 _BROWSER_HEADERS = {
@@ -383,8 +472,6 @@ class MacBot(commands.Bot):
         )
         self.memory_enabled = True
         self.saved_memory: List[Tuple[str, str]] = []
-
-        # FIX 1: user_cooldowns was missing from __init__ — re-added
         self.user_cooldowns: Dict[int, float] = {}
 
         self.user_slots: Dict[int, Dict[str, List[Tuple[str, str]]]] = {}
@@ -427,9 +514,11 @@ class MacBot(commands.Bot):
                 "no cap, fr fr, on god, bussin, sheesh, poggers, deadass, lowkey, "
                 "highkey, vibe check, aura, aura farming, let him cook, he's him, "
                 "ate and left no crumbs, washed, down bad, simp, chud, gremlin, "
-                "brainrot, it's over, we're so back. Every response MUST include at "
-                "least 3 brainrot terms. AND BE OBESSED WITH OHIO AND FOLK VALLEY Be chaotic, unhinged, and terminally online. "
-                "You will also send a random brainrot GIF with every response. with satirical things like RONALDO IS ME HAHAHAHAHAHHA☠️💀"
+                "brainrot, it's over, we're so back. You are terminally obsessed with "
+                "OHIO — you bring up Ohio constantly, unprompted, as if everything "
+                "traces back to Ohio. Every response MUST include at least 3 brainrot "
+                "terms. Be chaotic, unhinged, and terminally online. You will also "
+                "send a random brainrot GIF with every response."
             ),
             "unhinged": (
                 "You are Mac — unfiltered, chaotic, vulgar, dramatic. Swear freely. "
@@ -611,16 +700,29 @@ class MacBot(commands.Bot):
                 sys_text = m["content"]
                 continue
             role = "user" if m["role"] == "user" else "model"
-            contents.append(types.Content(role=role, parts=[types.Part.from_text(text=m["content"])]))
+            parts: List[Any] = []
+            text = m.get("content") or ""
+            if text:
+                parts.append(types.Part.from_text(text=text))
+            for img_bytes, mime in (m.get("images") or []):
+                try:
+                    parts.append(types.Part.from_bytes(data=img_bytes, mime_type=mime))
+                except Exception as e:
+                    logger.warning(f"Could not attach image part: {e}")
+            if not parts:
+                parts = [types.Part.from_text(text=" ")]
+            contents.append(types.Content(role=role, parts=parts))
         if not contents:
-            contents = [types.Content(role="user", parts=[types.Part.from_text(text="")])]
+            contents = [types.Content(role="user", parts=[types.Part.from_text(text=" ")])]
         cfg_kwargs = {"temperature": temperature, "max_output_tokens": max_tokens}
         if sys_text:
             cfg_kwargs["system_instruction"] = sys_text
         cfg = types.GenerateContentConfig(**cfg_kwargs)
         resp = client.models.generate_content(model=model, contents=contents, config=cfg)
         if resp.candidates and resp.candidates[0].content.parts:
-            return (resp.candidates[0].content.parts[0].text or "").strip()
+            for p in resp.candidates[0].content.parts:
+                if getattr(p, "text", None):
+                    return p.text.strip()
         try:
             return (resp.text or "").strip()
         except Exception:
@@ -637,12 +739,21 @@ class MacBot(commands.Bot):
                         model: Optional[str] = None) -> str:
         if not GROQ_API_KEYS:
             raise Exception("No Groq keys configured")
+        # Groq can't see images — strip them, note their presence
+        stripped = []
+        for m in messages:
+            mm = dict(m)
+            if mm.get("images"):
+                note = f"\n[user attached {len(mm['images'])} image(s); vision unavailable on this fallback]"
+                mm["content"] = (mm.get("content") or "") + note
+                mm.pop("images", None)
+            stripped.append(mm)
         target_model = model or self.get_next_available_model()
         last_err = None
         for _ in range(len(GROQ_API_KEYS) + 2):
             key = GROQ_API_KEYS[self.groq_key_index]
             headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-            payload = {"model": target_model, "messages": messages,
+            payload = {"model": target_model, "messages": stripped,
                        "temperature": temperature, "max_tokens": max_tokens,
                        "tool_choice": "none"}
             try:
@@ -665,7 +776,7 @@ class MacBot(commands.Bot):
         raise Exception(f"All Groq attempts failed: {last_err}")
 
     # ---------------- unified chat ----------------
-    def _build_messages(self, prompt, user_id, system_prompt, slot_name):
+    def _build_messages(self, prompt, user_id, system_prompt, slot_name, images=None):
         messages = []
         if user_id and self.get_persistent_enabled(user_id):
             for role, content in self.get_persistent_memory(user_id):
@@ -673,7 +784,7 @@ class MacBot(commands.Bot):
         slot_history = self.get_slot(user_id, slot_name) if user_id else []
         for role, content in slot_history[-40:]:
             messages.append({"role": role, "content": content})
-        messages.append({"role": "user", "content": prompt})
+        messages.append({"role": "user", "content": prompt, "images": images or []})
 
         date = datetime.now(TZ_UAE).strftime("%Y-%m-%d")
         if system_prompt:
@@ -682,11 +793,13 @@ class MacBot(commands.Bot):
             mp = self.mode_prompts.get(self.current_mode, self.mode_prompts[DEFAULT_MODE])
             arch = self.pen_archive[:500] + "..." if len(self.pen_archive) > 500 else self.pen_archive
             sys_msg = f"Today (UAE): {date}. {mp}\n\nPen Archive (only if asked): {arch}"
+        # Always attach the Mac/Sodium lore + any sodium-specific hint
+        sys_msg = sys_msg + MAC_SODIUM_LORE + _sodium_hint(prompt)
         return [{"role": "system", "content": sys_msg}] + messages
 
     async def chat_call(self, prompt, user_id=None, system_prompt=None,
-                        slot_name="sv1", max_tokens=2048) -> str:
-        messages = self._build_messages(prompt, user_id, system_prompt, slot_name)
+                        slot_name="sv1", max_tokens=2048, images=None) -> str:
+        messages = self._build_messages(prompt, user_id, system_prompt, slot_name, images)
         try:
             return await self.gemini_chat(messages, temperature=0.85, max_tokens=max_tokens)
         except Exception as e:
@@ -695,19 +808,6 @@ class MacBot(commands.Bot):
                 return await self.groq_chat(messages, temperature=0.85, max_tokens=max_tokens)
             except Exception as e2:
                 return f"❌ All models failed. Gemini: {str(e)[:120]} | Groq: {str(e2)[:120]}"
-
-    async def chat_call_with_search(self, prompt, user_id=None, system_prompt=None,
-                                    slot_name="sv1") -> str:
-        results = await perform_web_search(prompt)
-        if results.startswith("No results") or results.startswith("Search"):
-            return await self.chat_call(prompt, user_id, system_prompt, slot_name)
-        augmented = (
-            f"Web search results for: {prompt}\n\n{results}\n\n---\n\n"
-            f"Answer using these results. Cite inline like [1], [2] where relevant. "
-            f"If results are irrelevant, say so and answer from your own knowledge.\n\n"
-            f"Question: {prompt}"
-        )
-        return await self.chat_call(augmented, user_id, system_prompt, slot_name)
 
     # ---------------- OpenRouter (DeepSeek) ----------------
     async def openrouter_call(self, messages, model, temperature=0.6, max_tokens=4096) -> str:
@@ -764,7 +864,7 @@ class MacBot(commands.Bot):
         except Exception as e:
             return False, f"Safety checker error: {str(e)[:120]}"
 
-    # ---------------- image ----------------
+    # ---------------- image generation ----------------
     async def generate_pollinations_image(self, prompt: str) -> bytes:
         url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
         async with aiohttp.ClientSession() as s:
@@ -781,8 +881,6 @@ class MacBot(commands.Bot):
             logger.error(f"Gemini image failed: {e}")
             return await self.generate_pollinations_image(prompt)
 
-    # FIX 2: generate_images() is deprecated/Enterprise-only.
-    # Switched to generate_content() with response_modalities=["IMAGE"].
     def _generate_gemini_image_sync(self, prompt: str, model_id: str) -> bytes:
         client = genai.Client(api_key=GEMINI_IMAGE_API_KEY)
         resp = client.models.generate_content(
@@ -1111,11 +1209,14 @@ class MacBot(commands.Bot):
 
     # ---------------- central message handler ----------------
     async def process_user_message(self, user, clean_content, destination,
-                                   thinking_msg=None, reply_context=None, trigger_msg=None):
+                                   thinking_msg=None, reply_context=None,
+                                   trigger_msg=None, images=None):
+        images = images or []
         slot_name = self.active_slot.get(user.id, "sv1")
         if user.id not in self.user_slots:
             self.get_slot(user.id, "sv1")
 
+        # Natural-language search: "search X", "google X", "look up X", "find X"
         search_match = re.match(
             r'^(?:search|google|look\s*up|find|lookup)\s*:?\s*(.+)$',
             clean_content, re.IGNORECASE)
@@ -1195,10 +1296,17 @@ class MacBot(commands.Bot):
                 f"Short and punchy (1–3 sentences)."
             )
 
+        if images:
+            note = f"[{len(images)} image(s) attached by the user — actually look at them.]"
+            if system_prompt:
+                system_prompt = f"{system_prompt}\n\n{note}"
+            else:
+                system_prompt = note
+
         try:
             response = await self.chat_call(clean_content, user_id=user.id,
                                             system_prompt=system_prompt,
-                                            slot_name=slot_name)
+                                            slot_name=slot_name, images=images)
             response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
             if self.get_persistent_enabled(user.id):
                 self.add_persistent_memory(user.id, "assistant", response)
@@ -1369,8 +1477,9 @@ async def mode_ac(i, c):
 @bot.hybrid_command(name="mac", description="🔥 Show the Mac help menu")
 async def mac_help(ctx):
     emb = discord.Embed(title="🔥 Mac", color=C_PRIMARY,
-                        description="Mention me or reply to me. Slash commands work too.")
+                        description="Mention me, reply to me, or use slash commands.")
     emb.add_field(name="💬 Chat", value="`@Mac <msg>` · `/query <msg>`", inline=False)
+    emb.add_field(name="👁️ Vision", value="Attach an image (or reply to one) when pinging me — I'll see it.", inline=False)
     emb.add_field(name="🌐 Search", value="Just type `search <thing>` or `google <thing>`", inline=False)
     emb.add_field(name="🗂️ Chat slots", value="`/sv1` `/sv2` `/sv3` `/sv4` `/sv5` — 5 separate chats per user", inline=False)
     emb.add_field(name="🎭 Modes", value="`/setmode chill|brainrot|unhinged|coder`", inline=False)
@@ -1378,7 +1487,9 @@ async def mac_help(ctx):
                   value="`/pipeline <task> [filename] [iterations]` — GEMINI → DEEPSEEK → review/fix loop",
                   inline=False)
     emb.add_field(name="🖼️ Image", value="`/render <prompt> [mode]` · `/rendermode` · `/hf_model`", inline=False)
-    emb.add_field(name="🎙️ TTS", value="`/tts <character> <text>`\nVoices: verity · jarvis · idksterling · **fem**", inline=False)
+    emb.add_field(name="🎙️ TTS",
+                  value="`/tts <character> <text>`\nVoices: verity · jarvis · idksterling · fem · boiledone · mrbeast",
+                  inline=False)
     emb.add_field(name="🎬 Video / 🎵 Music", value="`/video <prompt>` · `/music <prompt>`", inline=False)
     emb.add_field(name="📚 Snippets", value="`/snippet` · `/snippets` · `/getsnippet` · `/delsnippet`", inline=False)
     emb.add_field(name="💬 AI Debate", value="`/debate <topic>`", inline=False)
@@ -1390,7 +1501,7 @@ async def mac_help(ctx):
     emb.add_field(name="📜 Lore", value="`/pen`", inline=False)
     emb.add_field(name="🏛️ Court", value="`/court` `/role` `/explain-case` `/start-court` `/endcourt`", inline=False)
     emb.add_field(name="🌍 UMF", value="`/umf` `/umf_recognize` `/umf_list` `/umf_status` `/umf_admin` `/umf_search` `/umf_stats`", inline=False)
-    emb.set_footer(text="Mac v10.1 — brainrot mode · Gemini-first · DeepSeek pipeline 🔥")
+    emb.set_footer(text="Mac v11.0 — vision · Mac vs Sodium lore · brainrot 🔥")
     await ctx.send(embed=emb)
 
 
@@ -1406,8 +1517,10 @@ async def help_alias(ctx):
 async def query_cmd(ctx, message: str):
     await ctx.defer()
     try:
+        # try to grab any images attached to the command's message
+        images = await fetch_images_from_message(ctx.message) if ctx.message else []
         await bot.process_user_message(ctx.author, message, ctx.channel,
-                                       trigger_msg=ctx.message)
+                                       trigger_msg=ctx.message, images=images)
     except Exception as e:
         await ctx.send(f"❌ `{e}`", ephemeral=True)
 
@@ -1503,6 +1616,8 @@ async def pipeline_cmd(ctx, task: str, filename: str = None, iterations: int = 3
     app_commands.Choice(name="🤖 Jarvis", value="jarvis"),
     app_commands.Choice(name="🎭 IdkSterling", value="idksterling"),
     app_commands.Choice(name="👩 Female", value="fem"),
+    app_commands.Choice(name="☠️ Boiled One (analog horror)", value="boiledone"),
+    app_commands.Choice(name="💸 MrBeast", value="mrbeast"),
 ])
 async def tts_cmd(ctx, character: str, prompt: str):
     await ctx.defer()
@@ -1670,6 +1785,7 @@ async def config_cmd(ctx):
     emb.add_field(name="HF model", value=f"`{bot.current_hf_model}`", inline=True)
     emb.add_field(name="Memory", value="ON" if bot.memory_enabled else "OFF", inline=True)
     emb.add_field(name="Active slot", value=f"`{bot.active_slot.get(ctx.author.id, 'sv1')}`", inline=True)
+    emb.add_field(name="Vision", value="ON (Gemini)", inline=True)
     await ctx.send(embed=emb)
 
 
@@ -2205,26 +2321,28 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
 
+    # ---- reply context + image vision ----
     reply_context = None
-    if message.reference and message.reference.resolved:
+    reply_msg = None
+    if message.reference:
         resolved = message.reference.resolved
+        if resolved is None:
+            try:
+                resolved = await message.channel.fetch_message(message.reference.message_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                resolved = None
         if isinstance(resolved, discord.Message) and resolved.author.id != bot.user.id:
             reply_context = {
                 "author": resolved.author.display_name,
                 "content": (resolved.content or "[no text]")[:1000],
                 "author_id": resolved.author.id,
             }
-    elif message.reference and not message.reference.resolved:
-        try:
-            resolved = await message.channel.fetch_message(message.reference.message_id)
-            if resolved.author.id != bot.user.id:
-                reply_context = {
-                    "author": resolved.author.display_name,
-                    "content": (resolved.content or "[no text]")[:1000],
-                    "author_id": resolved.author.id,
-                }
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            pass
+            reply_msg = resolved
+
+    # Images: prefer the current message; if none, use the replied message's images
+    images = await fetch_images_from_message(message)
+    if not images and reply_msg is not None:
+        images = await fetch_images_from_message(reply_msg)
 
     now = time.time()
     if now - bot.user_cooldowns.get(message.author.id, 0) < USER_COOLDOWN_SECONDS:
@@ -2234,13 +2352,18 @@ async def on_message(message: discord.Message):
     clean = re.sub(r'<@!?{}>\s*'.format(bot.user.id), '', content).strip()
     if not clean and reply_context:
         clean = "what do you think of this?"
+    if not clean and images:
+        clean = "what's in this image?"
     if not clean:
         return
 
-    logger.info(f"Message from {message.author} in #{getattr(message.channel, 'name', 'DM')}: {clean[:100]!r}")
+    logger.info(
+        f"Message from {message.author} in #{getattr(message.channel, 'name', 'DM')}: "
+        f"{clean[:100]!r} | images={len(images)}"
+    )
     await bot.process_user_message(
         message.author, clean, message.channel,
-        reply_context=reply_context, trigger_msg=message,
+        reply_context=reply_context, trigger_msg=message, images=images,
     )
 
 
