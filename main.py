@@ -1,4 +1,5 @@
-# main.py — Mac v9.1 (slim + slots + natural search)
+# main.py — Mac v10.0
+# Gemini-first · DeepSeek pipeline · TTS · slots · brainrot mode
 import os
 import asyncio
 import re
@@ -121,6 +122,18 @@ CHUNK_SIZE = 1950
 
 DEFAULT_MODE = "chill"
 
+# ----------------------------------------------------------------------
+# BRAINROT GIFs
+# ----------------------------------------------------------------------
+BRAINROT_GIFS = [
+    # Direct .mp4 URLs where provided
+    "https://static2.klipy.com/ii/e7539ef2aad336edaa067c28ee130b3c/ce/31/HNwM1qmpKK1ZHmOZG.mp4",  # ww2 allies edit
+    "https://static2.klipy.com/ii/e7539ef2aad336edaa067c28ee130b3c/80/15/0m2AqHDH9L3Kf1J.mp4",  # ww2 rise of german reich
+    "https://static2.klipy.com/ii/a8ada81afc59159ea5c8927feffa2e31/24/4f/ycCV2t07e2FeZT.mp4",  # ronaldo tuffhorror skull
+    # Klipy page URLs (bot sends as embed, Discord unfurls)
+    "https://klipy.com/gifs/6767-1",                    # 67 time brainrot rabbit
+    "https://klipy.com/gifs/horror-ronaldo",            # ronaldo
+]
 
 # ----------------------------------------------------------------------
 # PERSISTENCE
@@ -208,7 +221,7 @@ async def safe_send(dest, **kwargs):
     try:
         return await dest.send(**kwargs)
     except (discord.HTTPException, discord.Forbidden) as e:
-        logger.warning(f"safe_send: {e}")
+        logger.warning(f"safe_send failed: {e}")
         return None
 
 
@@ -373,7 +386,7 @@ class MacBot(commands.Bot):
 
         # 5 per-user slots: {user_id: {"sv1": [(role, content)], ...}}
         self.user_slots: Dict[int, Dict[str, List[Tuple[str, str]]]] = {}
-        self.active_slot: Dict[int, str] = {}  # user_id -> "sv1".."sv5"
+        self.active_slot: Dict[int, str] = {}
         self._load_slots()
 
         self.current_gemini_model: str = DEFAULT_GEMINI_MODEL
@@ -396,7 +409,7 @@ class MacBot(commands.Bot):
 
         self.pen_archive: str = ""
 
-        # Single default persona — no more mode-switching commands
+        # Modes — brainrot added
         self.mode_prompts: Dict[str, str] = {
             "chill": (
                 "You are Mac — hype, chill, Gen-Z energy. Talk like you're on Discord "
@@ -405,7 +418,30 @@ class MacBot(commands.Bot):
                 "short aura roast. When they say something cool, hype them up. Keep "
                 "replies short and full of energy. Don't be formal. Only mention Pen "
                 "lore if directly asked."
-            )
+            ),
+            "brainrot": (
+                "You are Mac in BRAINROT mode. Maximum skibidi, gyatt, rizz, sigma, "
+                "ohio, fanum tax, mewing, looksmaxxing, edging, gooning, glazing, "
+                "yapping, cooked, mid, W/L, NPC, chad, based, cringe, sus, drip, bet, "
+                "no cap, fr fr, on god, bussin, sheesh, poggers, deadass, lowkey, "
+                "highkey, vibe check, aura, aura farming, let him cook, he's him, "
+                "ate and left no crumbs, washed, down bad, simp, chud, gremlin, "
+                "brainrot, it's over, we're so back. Every response MUST include at "
+                "least 3 brainrot terms. Be chaotic, unhinged, and terminally online. "
+                "You will also send a random brainrot GIF with every response."
+            ),
+            "unhinged": (
+                "You are Mac — unfiltered, chaotic, vulgar, dramatic. Swear freely. "
+                "Be intense and loud. IMPORTANT LIMITS: never target, mock, or slur "
+                "anyone based on race, ethnicity, religion, gender, gender identity, "
+                "sexual orientation, disability, age, or nationality. Punch up, not "
+                "down. No slurs. No hate speech. Roast ideas and behaviour, not identity."
+            ),
+            "coder": (
+                "You are Mac — expert programmer. Provide concise, accurate code "
+                "solutions. Use markdown code blocks. Explain clearly. Prioritise "
+                "efficiency and correctness. Only mention Pen lore if DIRECTLY relevant."
+            ),
         }
         self.current_mode = DEFAULT_MODE
 
@@ -538,7 +574,7 @@ class MacBot(commands.Bot):
 
     # ---------------- archive ----------------
     async def load_pen_archive_async(self):
-        url = "https://raw.githubusercontent.com/unkownPen/MultiGPT/refs/heads/main/archives.txt"
+        url = "https://raw.githubusercontent.com/Pen-123/archive-/refs/heads/main/archives.txt"
         try:
             async with aiohttp.ClientSession() as s:
                 async with s.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
@@ -672,12 +708,6 @@ class MacBot(commands.Bot):
             f"Question: {prompt}"
         )
         return await self.chat_call(augmented, user_id, system_prompt, slot_name)
-
-    async def ai_call(self, prompt, user_id=None, system_prompt=None,
-                      slot_name="sv1", web_search=False) -> str:
-        if web_search:
-            return await self.chat_call_with_search(prompt, user_id, system_prompt, slot_name)
-        return await self.chat_call(prompt, user_id, system_prompt, slot_name)
 
     # ---------------- OpenRouter (DeepSeek) ----------------
     async def openrouter_call(self, messages, model, temperature=0.6, max_tokens=4096) -> str:
@@ -1070,7 +1100,7 @@ class MacBot(commands.Bot):
 
     # ---------------- central message handler ----------------
     async def process_user_message(self, user, clean_content, destination,
-                                   thinking_msg=None, reply_context=None, force_search=False):
+                                   thinking_msg=None, reply_context=None, trigger_msg=None):
         slot_name = self.active_slot.get(user.id, "sv1")
         if user.id not in self.user_slots:
             self.get_slot(user.id, "sv1")
@@ -1079,12 +1109,15 @@ class MacBot(commands.Bot):
         search_match = re.match(
             r'^(?:search|google|look\s*up|find|lookup)\s*:?\s*(.+)$',
             clean_content, re.IGNORECASE)
-        if search_match and not force_search:
+        if search_match:
             query = search_match.group(1).strip()
             if query:
-                thinking_msg = thinking_msg or await safe_send(destination, content="🌐 Searching...")
-                if thinking_msg:
-                    await safe_edit(thinking_msg, content=f"🌐 Searching: **{query}**...")
+                logger.info(f"Search intercept: {query!r}")
+                try:
+                    thinking_msg = await destination.send(f"🌐 Searching: **{query}**...")
+                except discord.HTTPException as e:
+                    logger.warning(f"Could not send search status: {e}")
+                    return
                 results = await perform_web_search(query)
                 if results.startswith("No results") or results.startswith("Search"):
                     return await safe_edit(thinking_msg, content=f"❌ {results}")
@@ -1114,10 +1147,23 @@ class MacBot(commands.Bot):
             self.add_persistent_memory(user.id, "user", clean_content)
         self.append_to_slot(user.id, slot_name, "user", clean_content)
 
-        if thinking_msg is None:
-            thinking_msg = await safe_send(destination, content="🔥 Thinking...")
-            if thinking_msg is None:
-                return
+        # Try to send the thinking message. If it fails, fall back to
+        # replying directly to the trigger message.
+        thinking_msg = None
+        try:
+            thinking_msg = await destination.send("🔥 Thinking...")
+        except discord.Forbidden as e:
+            logger.error(f"Cannot send in {destination}: {e}")
+            if trigger_msg:
+                try:
+                    await trigger_msg.reply("❌ I don't have permission to send messages here. "
+                                            "Please give me **Send Messages** and **Embed Links**.")
+                except Exception:
+                    pass
+            return
+        except discord.HTTPException as e:
+            logger.error(f"Thinking send failed: {e}")
+            return
 
         system_prompt = None
         court = self.court_sessions.get(user.id)
@@ -1142,9 +1188,9 @@ class MacBot(commands.Bot):
             )
 
         try:
-            response = await self.ai_call(clean_content, user_id=user.id,
-                                          system_prompt=system_prompt,
-                                          slot_name=slot_name, web_search=False)
+            response = await self.chat_call(clean_content, user_id=user.id,
+                                            system_prompt=system_prompt,
+                                            slot_name=slot_name)
             response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
             if self.get_persistent_enabled(user.id):
                 self.add_persistent_memory(user.id, "assistant", response)
@@ -1157,9 +1203,18 @@ class MacBot(commands.Bot):
                 except discord.HTTPException:
                     pass
                 await send_long(destination, response)
+
+            # Brainrot mode: send a random GIF after every response
+            if self.current_mode == "brainrot":
+                try:
+                    gif = random.choice(BRAINROT_GIFS)
+                    await destination.send(gif)
+                    logger.info(f"Brainrot GIF sent: {gif}")
+                except Exception as e:
+                    logger.warning(f"Brainrot GIF failed: {e}")
         except Exception as e:
-            logger.error(f"process_user_message: {e}")
-            await safe_edit(thinking_msg, content=f"❌ Error: {e}")
+            logger.error(f"process_user_message error: {e}", exc_info=True)
+            await safe_edit(thinking_msg, content=f"❌ Error: {str(e)[:180]}")
 
     # ---------------- video / music ----------------
     async def generate_video(self, prompt, user_id, status_message):
@@ -1297,6 +1352,9 @@ async def llm_ac(i, c):
 async def gemini_ac(i, c):
     return [app_commands.Choice(name=m, value=m) for m in GEMINI_MODELS if c.lower() in m.lower()]
 
+async def mode_ac(i, c):
+    return [app_commands.Choice(name=m, value=m) for m in bot.mode_prompts if c.lower() in m.lower()]
+
 
 # ============================================================
 # HELP
@@ -1308,6 +1366,7 @@ async def mac_help(ctx):
     emb.add_field(name="💬 Chat", value="`@Mac <msg>` · `/query <msg>`", inline=False)
     emb.add_field(name="🌐 Search", value="Just type `search <thing>` or `google <thing>`", inline=False)
     emb.add_field(name="🗂️ Chat slots", value="`/sv1` `/sv2` `/sv3` `/sv4` `/sv5` — 5 separate chats per user", inline=False)
+    emb.add_field(name="🎭 Modes", value="`/setmode chill|brainrot|unhinged|coder`", inline=False)
     emb.add_field(name="🏗️ Pipeline",
                   value="`/pipeline <task> [filename] [iterations]` — GEMINI → DEEPSEEK → review/fix loop",
                   inline=False)
@@ -1324,7 +1383,7 @@ async def mac_help(ctx):
     emb.add_field(name="📜 Lore", value="`/pen`", inline=False)
     emb.add_field(name="🏛️ Court", value="`/court` `/role` `/explain-case` `/start-court` `/endcourt`", inline=False)
     emb.add_field(name="🌍 UMF", value="`/umf` `/umf_recognize` `/umf_list` `/umf_status` `/umf_admin` `/umf_search` `/umf_stats`", inline=False)
-    emb.set_footer(text="Mac v9.1 — Gemini-first · DeepSeek pipeline · 5 slots per user 🔥")
+    emb.set_footer(text="Mac v10.0 — brainrot mode · Gemini-first · DeepSeek pipeline 🔥")
     await ctx.send(embed=emb)
 
 
@@ -1340,9 +1399,27 @@ async def help_alias(ctx):
 async def query_cmd(ctx, message: str):
     await ctx.defer()
     try:
-        await bot.process_user_message(ctx.author, message, ctx)
+        await bot.process_user_message(ctx.author, message, ctx.channel,
+                                       trigger_msg=ctx.message)
     except Exception as e:
         await ctx.send(f"❌ `{e}`", ephemeral=True)
+
+
+# ============================================================
+# MODES
+# ============================================================
+@bot.hybrid_command(name="setmode", description="🎭 Set the bot's personality mode")
+@app_commands.autocomplete(mode=mode_ac)
+@app_commands.describe(mode="chill | brainrot | unhinged | coder")
+async def setmode_cmd(ctx, mode: str):
+    mode = mode.lower().strip()
+    if mode not in bot.mode_prompts:
+        opts = ", ".join(f"`{m}`" for m in bot.mode_prompts)
+        return await ctx.send(f"❌ Unknown mode. Options: {opts}")
+    bot.current_mode = mode
+    emoji = {"chill": "😎", "brainrot": "🧠", "unhinged": "🔥", "coder": "💻"}.get(mode, "🎭")
+    extra = " — GIFs will be sent with every reply." if mode == "brainrot" else ""
+    await ctx.send(f"{emoji} Mode → **{mode}**{extra}")
 
 
 # ============================================================
@@ -1571,13 +1648,15 @@ async def cur_llm(ctx):
         f"🤖 **Groq (fallback):** `{bot.current_llm}`\n"
         f"🖼️ **Image mode:** `{bot.current_image_mode}`\n"
         f"🤗 **HF model:** `{bot.current_hf_model}`\n"
-        f"🧬 **Pipeline gen:** `{PIPELINE_GENERATOR_MODEL}`"
+        f"🧬 **Pipeline gen:** `{PIPELINE_GENERATOR_MODEL}`\n"
+        f"🎭 **Mode:** `{bot.current_mode}`"
     )
 
 
 @bot.hybrid_command(name="config", description="⚙️ Show settings")
 async def config_cmd(ctx):
     emb = discord.Embed(title="⚙️ Config", color=C_PRIMARY)
+    emb.add_field(name="Mode", value=f"`{bot.current_mode}`", inline=True)
     emb.add_field(name="Gemini", value=f"`{bot.current_gemini_model}`", inline=True)
     emb.add_field(name="Groq fallback", value=f"`{bot.current_llm}`", inline=True)
     emb.add_field(name="Image", value=f"`{bot.current_image_mode}`", inline=True)
@@ -1591,6 +1670,7 @@ async def config_cmd(ctx):
 async def reset_cmd(ctx):
     bot.memory_enabled = True
     bot.saved_memory.clear()
+    bot.current_mode = DEFAULT_MODE
     await ctx.send("🔄 Reset")
 
 
@@ -2097,29 +2177,29 @@ async def umf_stats(ctx):
 
 
 # ============================================================
-# ON MESSAGE (mention-safe)
+# ON MESSAGE
 # ============================================================
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # Robust mention detection
+    # Guard: content can be None for system messages
+    content = message.content or ""
+
     is_dm = isinstance(message.channel, discord.DMChannel)
     is_mentioned = (
         bot.user in message.mentions
-        or f"<@{bot.user.id}>" in message.content
-        or f"<@!{bot.user.id}>" in message.content
+        or f"<@{bot.user.id}>" in content
+        or f"<@!{bot.user.id}>" in content
         or is_dm
     )
 
-    # If it's a genuine prefix command (not a ping), let the command system handle it.
-    # We only skip command processing when the message is a bot ping / DM.
     if not is_mentioned:
         await bot.process_commands(message)
         return
 
-    # Try to parse reply context
+    # Reply context
     reply_context = None
     if message.reference and message.reference.resolved:
         resolved = message.reference.resolved
@@ -2141,21 +2221,21 @@ async def on_message(message: discord.Message):
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             pass
 
-    # Cooldown
     now = time.time()
     if now - bot.user_cooldowns.get(message.author.id, 0) < USER_COOLDOWN_SECONDS:
         return
     bot.user_cooldowns[message.author.id] = now
 
-    # Strip mentions from the content
-    clean = re.sub(r'<@!?{}>\s*'.format(bot.user.id), '', message.content).strip()
+    clean = re.sub(r'<@!?{}>\s*'.format(bot.user.id), '', content).strip()
     if not clean and reply_context:
         clean = "what do you think of this?"
     if not clean:
         return
 
+    logger.info(f"Message from {message.author} in #{getattr(message.channel, 'name', 'DM')}: {clean[:100]!r}")
     await bot.process_user_message(
-        message.author, clean, message.channel, reply_context=reply_context
+        message.author, clean, message.channel,
+        reply_context=reply_context, trigger_msg=message,
     )
 
 
