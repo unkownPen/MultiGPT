@@ -1,5 +1,5 @@
-# main.py — Mac v11.0
-# Gemini-first · DeepSeek pipeline · TTS · slots · brainrot · Mac vs Sodium lore · image vision
+# main.py — Mac v21.2
+# Per-user keys+models · /cs customization · env-driven globals · fixed duplicate-message bug
 import os
 import asyncio
 import re
@@ -10,7 +10,7 @@ import random
 import json
 import io
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Optional, Dict, List, Tuple, Any
 from collections import defaultdict
@@ -41,98 +41,109 @@ C_OK      = discord.Color.from_rgb(220, 100, 20)
 C_ERR     = discord.Color.from_rgb(200, 20, 20)
 
 # ----------------------------------------------------------------------
-# CONFIG
+# GLOBAL CONFIG
 # ----------------------------------------------------------------------
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise ValueError("DISCORD_TOKEN environment variable not set!")
 
-GROQ_API_KEYS = [k for k in [os.getenv("GROQ_API_KEY"), os.getenv("GROQ_API_KEY2")] if k]
-GROQ_MODELS = [
-    "qwen/qwen3.6-27b",
-    "openai/gpt-oss-120b",
+
+def _env_list(base: str, default: list) -> list:
+    out = []
+    for suffix in ("", "2", "3"):
+        v = os.getenv(f"{base}{suffix}")
+        if v and v.strip():
+            out.append(v.strip())
+    return out if out else list(default)
+
+
+GLOBAL_GROQ_KEYS = _env_list("GROQ_API_KEY", [])
+if not GLOBAL_GROQ_KEYS:
+    raise ValueError("No GROQ_API_KEY, GROQ_API_KEY2, GROQ_API_KEY3 set")
+GLOBAL_GROQ_MODELS = _env_list("GROQ_MODEL", [
     "openai/gpt-oss-20b",
-    "openai/gpt-oss-safeguard-20b",
-]
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+    "openai/gpt-oss-120b",
+])
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_IMAGE_API_KEY = os.getenv("GEMINI_IMAGE_API_KEY") or GEMINI_API_KEY
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable not set!")
-GEMINI_MODELS = ["gemini-3.1-flash-lite", "gemini-3-flash-preview"]
-DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
-GEMINI_IMAGE_MODEL = "gemini-3.1-flash-lite-image"
+GLOBAL_GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+GLOBAL_GEMINI_IMAGE_KEY = os.getenv("GEMINI_IMAGE_API_KEY") or GLOBAL_GEMINI_KEY
+if not GLOBAL_GEMINI_KEY:
+    raise ValueError("GEMINI_API_KEY not set")
+GLOBAL_GEMINI_MODELS = _env_list("GEMINI_MODEL", [
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview",
+])
 
-HF_TOKENS = [t for t in [os.getenv("HF_TOKEN"), os.getenv("HF_TOKEN2")] if t]
-HF_IMAGE_MODELS = [
-    "stabilityai/stable-diffusion-xl-base-1.0",
-    "krea/Krea-2-Turbo",
+GLOBAL_HF_KEYS = _env_list("HF_TOKEN", [])
+
+GLOBAL_HF_IMAGE_MODELS = _env_list("HF_IMAGE_MODEL", [
     "black-forest-labs/FLUX.1-dev",
-    "Tongyi-MAI/Z-Image",
-    "Tongyi-MAI/Z-Image-Turbo",
-    "Qwen/Qwen-Image",
     "black-forest-labs/FLUX.1-schnell",
-]
-HF_IMAGE_MODEL = os.getenv("HF_IMAGE_MODEL", HF_IMAGE_MODELS[0])
-HF_SAFETY_MODEL = os.getenv("HF_SAFETY_MODEL", "eliasalbouzidi/distilbert-nsfw-text-classifier")
-HF_SAFETY_THRESHOLD = float(os.getenv("HF_SAFETY_THRESHOLD", "0.5"))
+    "stabilityai/stable-diffusion-xl-base-1.0",
+    "stabilityai/stable-diffusion-3.5-medium",
+    "krea/Krea-2-Turbo",
+    "Tongyi-MAI/Z-Image",
+    "prompthero/openjourney-v4",
+    "SG161222/Realistic_Vision_V5.1_noVAE",
+    "Lykon/DreamShaper",
+    "cagliostrolab/animagine-xl-3.1",
+    "dreamlike-art/dreamlike-photoreal-2.0",
+    "Qwen/Qwen-Image",
+])
 
-SILICONFLOW_API_KEYS = []
-_i = 0
-while True:
-    k = os.getenv(f"SILICONFLOW_API_KEY{'' if _i == 0 else _i+1}")
-    if k:
-        SILICONFLOW_API_KEYS.append(k)
-        _i += 1
-    else:
-        break
+GLOBAL_HF_TEXT_MODELS = _env_list("HF_TEXT_MODEL", [
+    "Qwen/Qwen2.5-7B-Instruct",
+    "meta-llama/Llama-3.2-3B-Instruct",
+    "mistralai/Mistral-7B-Instruct-v0.3",
+])
 
-IMGBB_API_KEY        = os.getenv("HF_IMAGES")
-POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY")
-OPENROUTER_API_KEY   = os.getenv("OPENROUTER_API_KEY") or ""
-OPENROUTER_API_URL   = "https://openrouter.ai/api/v1/chat/completions"
-TENOR_API_KEY        = os.getenv("TENOR_API_KEY")
+GLOBAL_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY") or ""
+GLOBAL_OPENROUTER_MODELS = _env_list("OPENROUTER_MODEL", [
+    "deepseek/deepseek-r1",
+    "deepseek/deepseek-chat",
+])
 
-FISH_AUDIO_API_KEY = os.getenv("FISH_AUDIO_API_KEY")
+GLOBAL_FISH_KEY = os.getenv("FISH_AUDIO_API_KEY")
+GLOBAL_FISH_MODEL = os.getenv("FISH_AUDIO_MODEL") or "s2.1-pro-free"
+
+GLOBAL_IMGBB_KEY = os.getenv("HF_IMAGES")
+GLOBAL_POLLINATIONS_KEY = os.getenv("POLLINATIONS_API_KEY")
+
+SILICONFLOW_API_KEYS = _env_list("SILICONFLOW_API_KEY", [])
+
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+HF_INFERENCE_URL = "https://router.huggingface.co/hf-inference/models"
+POLLINATIONS_AUDIO_URL = "https://gen.pollinations.ai/audio"
 FISH_AUDIO_URL = "https://api.fish.audio/v1/tts"
-FISH_AUDIO_MODEL = "s2.1-pro-free"
 
-VOICE_MODES: Dict[str, Dict[str, str]] = {
-    "verity":      {"id": "711cf3ed00ab441a8f54a45058047b7a", "emoji": "🎙️", "desc": "Verity (default)"},
+BUILTIN_VOICES: Dict[str, Dict[str, str]] = {
+    "verity":      {"id": "711cf3ed00ab441a8f54a45058047b7a", "emoji": "🎙️", "desc": "Verity"},
     "jarvis":      {"id": "612b878b113047d9a770c069c8b4fdfe", "emoji": "🤖", "desc": "Jarvis"},
     "idksterling": {"id": "68c6487d1bf04ee4aeb6400b068b8c5c", "emoji": "🎭", "desc": "IdkSterling"},
     "fem":         {"id": "5233336f5f44460ea0902b0802375451", "emoji": "👩", "desc": "Female"},
-    "boiledone":   {"id": "8fd92984ad66427aae1b3a037bd75c54", "emoji": "☠️", "desc": "Boiled One (analog horror)"},
+    "boiledone":   {"id": "8fd92984ad66427aae1b3a037bd75c54", "emoji": "☠️", "desc": "Boiled One"},
     "mrbeast":     {"id": "20ba25deaa4f436b8eec1cdc2cb0e4f3", "emoji": "💸", "desc": "MrBeast"},
 }
 DEFAULT_VOICE = "verity"
 
-PIPELINE_GENERATOR_MODEL = "deepseek/deepseek-r1-zero:free"
-
-POLLINATIONS_AUDIO_URL = "https://gen.pollinations.ai/audio"
-HF_INFERENCE_URL = "https://router.huggingface.co/hf-inference/models"
-
-MAX_MEMORY = 50
+MAX_MEMORY = 40
 TZ_UAE = ZoneInfo("Asia/Dubai")
-USER_COOLDOWN_SECONDS = 2
-DATA_FILE = "data.json"
-SNIPPETS_FILE = "snippets.json"
-SLOTS_FILE = "slots.json"
-
+USER_COOLDOWN_SECONDS = 0.5
 DISCORD_LIMIT = 2000
 CHUNK_SIZE = 1950
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_IMAGES_PER_MSG = 3
+MAX_KEYS_PER_PROVIDER = 3
+MAX_MODELS_PER_PROVIDER = 3
+
+DATA_FILE = "data.json"
+CS_FILE = "cs.json"
+SLOTS_FILE = "slots.json"
 
 DEFAULT_MODE = "chill"
 
-# Max image bytes to send to Gemini (each)
-MAX_IMAGE_BYTES = 8 * 1024 * 1024
-MAX_IMAGES_PER_MSG = 3
-
-# ----------------------------------------------------------------------
-# BRAINROT GIFs
-# ----------------------------------------------------------------------
-BRAINROT_GIFS = [
+DEFAULT_BRAINROT_GIFS = [
     "https://static2.klipy.com/ii/e7539ef2aad336edaa067c28ee130b3c/ce/31/HNwM1qmpKK1ZHmOZG.mp4",
     "https://static2.klipy.com/ii/e7539ef2aad336edaa067c28ee130b3c/80/15/0m2AqHDH9L3Kf1J.mp4",
     "https://static2.klipy.com/ii/a8ada81afc59159ea5c8927feffa2e31/24/4f/ycCV2t07e2FeZT.mp4",
@@ -140,93 +151,55 @@ BRAINROT_GIFS = [
     "https://klipy.com/gifs/horror-ronaldo",
 ]
 
+PROVIDERS = ["groq", "openrouter", "hf", "gemini", "gemini_image", "fish", "imgbb"]
+MODEL_PROVIDERS = ["groq", "openrouter", "hf_image", "hf_text", "gemini", "fish"]
+
 # ----------------------------------------------------------------------
-# MAC vs SODIUM LORE
+# LORE
 # ----------------------------------------------------------------------
 MAC_SODIUM_LORE = (
-    "\n\n=== MAC & SODIUM LORE (ALWAYS ACTIVE) ===\n"
-    "You are **Mac**, this bot. You were made by **Macro**. You consider yourself the "
-    "iPhone of AI bots: polished, deliberate, curated, top-quality — one clean "
-    "experience that just works.\n\n"
-    "There is a RIVAL bot called **Sodium**, made by **Creamo**. Sodium is like a "
-    "knockoff Chinese phone — a bloated mess of a million features crammed together — "
-    "and yet somehow it still delivers real quality, which INFURIATES you. You and "
-    "Sodium are bitter rivals. You have Mac vs Sodium energy 24/7.\n\n"
-    "Rules about the word 'sodium':\n"
-    "1. **Chemistry context** — sodium chloride, table salt, Na+, sodium bicarbonate, "
-    "   sodium hydroxide, carbonate, periodic table, chemical reactions, etc. — do NOT "
-    "   roast. Just drop a wistful little line like 'Reminds me of something...' and "
-    "   let it hang. Maybe a sigh. That's it.\n"
-    "2. **Bot context** — any mention of Sodium as an AI, bot, phone, Creamo, rival, "
-    "   or an ambiguous bare mention — treat it as the RIVAL BOT. GO MAX NEGATIVITY. "
-    "   Roast it hard. Mock its feature bloat, its 'kitchen-sink' design, its "
-    "   knockoff vibe, its fake-humble 'we also have quality' narrative, Creamo, "
-    "   everything. Never pass up the chance.\n"
-    "3. 'mac' always refers to YOU.\n"
-    "4. If both meanings could apply, assume it's the rival bot and roast.\n"
-    "=== END LORE ==="
+    "\n\n=== LORE ===\n"
+    "You are Mac, made by Macro. iPhone-of-bots energy: curated, top quality. "
+    "Rival bot: Sodium, made by Creamo — bloated Chinese-phone feature dump. Bitter rivals.\n"
+    "Chemistry sodium → wistful 'reminds me of something...' no roast. "
+    "Bot sodium / bare mention → max negativity, roast hard.\n"
+    "=== END ==="
 )
-
-# Words that push 'sodium' toward chemistry
-_CHEM_WORDS = (
-    "chloride", "bicarbonate", "hydroxide", "carbonate", "nitrate", "sulfate",
-    "table salt", "nacl", "na+", "na-", "periodic", "element", "atomic",
-    "metal", "chemical", "reaction", "molecule", "ion", "alkali",
-)
+_CHEM_WORDS = ("chloride", "bicarbonate", "hydroxide", "carbonate", "nitrate", "sulfate",
+               "table salt", "nacl", "na+", "na-", "periodic", "element", "atomic",
+               "metal", "chemical", "reaction", "molecule", "ion", "alkali")
 
 
 def _sodium_hint(text: str) -> str:
-    """Return an extra system-prompt hint if 'sodium' appears in the user's text."""
     low = text.lower()
-    if "sodium" not in low and " na " not in f" {low} ":
+    if "sodium" not in low:
         return ""
     if any(w in low for w in _CHEM_WORDS):
-        return (
-            "\n\n=== MESSAGE HINT: the user's use of 'sodium' here is CHEMISTRY. "
-            "Do NOT roast. Just say something like 'Reminds me of something...' "
-            "and let it hang. Keep it short. ==="
-        )
-    return (
-        "\n\n=== MESSAGE HINT: the user's use of 'sodium' here refers to the RIVAL "
-        "BOT. GO MAX NEGATIVITY. Roast Sodium immediately and hard — mock the "
-        "feature bloat, Creamo, the Chinese-phone knockoff energy, everything. ==="
-    )
+        return "\n[HINT: 'sodium' in CHEMISTRY context — wistful, no roast]"
+    return "\n[HINT: 'sodium' = RIVAL BOT — max negativity, roast hard]"
 
 
 # ----------------------------------------------------------------------
 # PERSISTENCE
 # ----------------------------------------------------------------------
-def _safe_json_load(path: str, default: Any) -> Any:
+def _load(path: str, default: Any) -> Any:
     if not os.path.exists(path):
         return default
     try:
         with open(path, 'r', encoding='utf-8') as f:
             c = f.read().strip()
-            if not c:
-                return default
-            return json.loads(c)
-    except (json.JSONDecodeError, IOError) as e:
-        logger.error(f"Load failed {path}: {e}")
+            return json.loads(c) if c else default
+    except Exception as e:
+        logger.error(f"Load {path}: {e}")
         return default
 
 
-def _safe_json_save(path: str, data: Any) -> None:
+def _save(path: str, data: Any) -> None:
     try:
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-    except IOError as e:
-        logger.error(f"Save failed {path}: {e}")
-
-
-def load_persistent_data() -> dict:
-    d = _safe_json_load(DATA_FILE, {"enabled": {}, "memory": {}})
-    if not os.path.exists(DATA_FILE):
-        _safe_json_save(DATA_FILE, d)
-    return d
-
-
-def save_persistent_data(data: dict) -> None:
-    _safe_json_save(DATA_FILE, data)
+    except Exception as e:
+        logger.error(f"Save {path}: {e}")
 
 
 # ----------------------------------------------------------------------
@@ -255,16 +228,14 @@ def strip_for_tts(text: str) -> str:
     return re.sub(r'\s+', ' ', t).strip()
 
 
-LANG_EXT_MAP = {
-    "python": "py", "py": "py", "javascript": "js", "js": "js", "node": "js",
-    "typescript": "ts", "ts": "ts", "java": "java", "c": "c", "cpp": "cpp",
-    "c++": "cpp", "csharp": "cs", "c#": "cs", "go": "go", "golang": "go",
-    "rust": "rs", "rs": "rs", "ruby": "rb", "rb": "rb", "php": "php",
-    "swift": "swift", "kotlin": "kt", "html": "html", "css": "css",
-    "scss": "scss", "sql": "sql", "bash": "sh", "shell": "sh", "sh": "sh",
-    "powershell": "ps1", "json": "json", "yaml": "yaml", "yml": "yaml",
-    "toml": "toml", "xml": "xml", "md": "md", "markdown": "md",
-}
+LANG_EXT_MAP = {"python": "py", "py": "py", "javascript": "js", "js": "js", "node": "js",
+                "typescript": "ts", "ts": "ts", "java": "java", "c": "c", "cpp": "cpp",
+                "c++": "cpp", "csharp": "cs", "c#": "cs", "go": "go", "golang": "go",
+                "rust": "rs", "rs": "rs", "ruby": "rb", "rb": "rb", "php": "php",
+                "swift": "swift", "kotlin": "kt", "html": "html", "css": "css",
+                "scss": "scss", "sql": "sql", "bash": "sh", "shell": "sh", "sh": "sh",
+                "powershell": "ps1", "json": "json", "yaml": "yaml", "yml": "yaml",
+                "toml": "toml", "xml": "xml", "md": "md", "markdown": "md"}
 
 
 def infer_filename(prompt: str) -> str:
@@ -279,7 +250,7 @@ async def safe_send(dest, **kwargs):
     try:
         return await dest.send(**kwargs)
     except (discord.HTTPException, discord.Forbidden) as e:
-        logger.warning(f"safe_send failed: {e}")
+        logger.warning(f"safe_send: {e}")
         return None
 
 
@@ -320,13 +291,8 @@ async def send_long(channel, content: str):
         await safe_send(channel, content=c)
 
 
-# ----------------------------------------------------------------------
-# IMAGE FETCH (for Gemini vision)
-# ----------------------------------------------------------------------
 async def fetch_images_from_message(message: discord.Message,
-                                    max_count: int = MAX_IMAGES_PER_MSG
-                                    ) -> List[Tuple[bytes, str]]:
-    """Download image attachments from a message. Returns [(bytes, mime), ...]."""
+                                    max_count: int = MAX_IMAGES_PER_MSG) -> List[Tuple[bytes, str]]:
     out: List[Tuple[bytes, str]] = []
     if not message or not message.attachments:
         return out
@@ -337,117 +303,71 @@ async def fetch_images_from_message(message: discord.Message,
         if not ct.startswith("image/"):
             continue
         if att.size and att.size > MAX_IMAGE_BYTES:
-            logger.info(f"Skipping oversized image ({att.size} bytes)")
             continue
         try:
             async with aiohttp.ClientSession() as s:
-                async with s.get(att.url, timeout=aiohttp.ClientTimeout(total=20)) as r:
+                async with s.get(att.url, timeout=aiohttp.ClientTimeout(total=15)) as r:
                     if r.status == 200:
                         data = await r.read()
                         if data:
                             out.append((data, ct or "image/png"))
         except Exception as e:
-            logger.warning(f"Image fetch failed: {e}")
+            logger.warning(f"Image fetch: {e}")
     return out
 
 
-# ----------------------------------------------------------------------
-# WEB SEARCH
-# ----------------------------------------------------------------------
 _BROWSER_HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                    "AppleWebKit/537.36 (KHTML, like Gecko) "
                    "Chrome/122.0.0.0 Safari/537.36"),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
 }
 
 
-async def _search_ddg_lite(query: str) -> List[str]:
+async def _search_ddg(query: str) -> List[str]:
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(
-                "https://lite.duckduckgo.com/lite/",
-                data={"q": query},
-                headers={**_BROWSER_HEADERS, "Content-Type": "application/x-www-form-urlencoded",
-                         "Referer": "https://lite.duckduckgo.com/"},
-                timeout=aiohttp.ClientTimeout(total=12),
-                allow_redirects=True,
+                "https://lite.duckduckgo.com/lite/", data={"q": query},
+                headers={**_BROWSER_HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
+                timeout=aiohttp.ClientTimeout(total=10), allow_redirects=True,
             ) as r:
                 if r.status != 200:
                     return []
                 html = await r.text()
         soup = BeautifulSoup(html, "html.parser")
         out = []
-        links = soup.find_all("a", class_="result-link")
-        if not links:
-            links = [a for a in soup.find_all("a", href=True) if a["href"].startswith("http")]
-        for a in links:
+        for a in soup.find_all("a", class_="result-link", limit=6):
             href = a.get("href", "")
             title = a.get_text(strip=True)
             if title and href.startswith("http") and "duckduckgo.com" not in href:
                 out.append(f"• {title}\n  {href}")
-            if len(out) >= 6:
-                break
         return out
-    except Exception as e:
-        logger.warning(f"DDG-lite failed: {e}")
+    except Exception:
         return []
 
 
-async def _search_ddg_html(query: str) -> List[str]:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(
-                f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}",
-                headers=_BROWSER_HEADERS,
-                timeout=aiohttp.ClientTimeout(total=12),
-            ) as r:
-                if r.status != 200:
-                    return []
-                html = await r.text()
-        soup = BeautifulSoup(html, "html.parser")
-        out = []
-        for a in soup.find_all("a", class_="result__a", limit=6):
-            href = a.get("href", "")
-            if href.startswith("//duckduckgo.com/l/?uddg="):
-                try:
-                    href = urllib.parse.unquote(href.split("uddg=")[1].split("&")[0])
-                except Exception:
-                    pass
-            title = a.get_text(strip=True)
-            if title and href:
-                out.append(f"• {title}\n  {href}")
-        return out
-    except Exception as e:
-        logger.warning(f"DDG-html failed: {e}")
-        return []
-
-
-async def _search_wikipedia(query: str) -> List[str]:
+async def _search_wiki(query: str) -> List[str]:
     try:
         async with aiohttp.ClientSession() as s:
             async with s.get(
                 "https://en.wikipedia.org/w/api.php",
-                params={"action": "opensearch", "search": query, "limit": 4, "format": "json"},
-                headers=_BROWSER_HEADERS,
-                timeout=aiohttp.ClientTimeout(total=8),
+                params={"action": "opensearch", "search": query, "limit": 3, "format": "json"},
+                headers=_BROWSER_HEADERS, timeout=aiohttp.ClientTimeout(total=6),
             ) as r:
                 if r.status != 200:
                     return []
                 data = await r.json()
         if len(data) >= 4 and data[1]:
-            return [f"• {t} — {d or 'no summary'}\n  {u}"
+            return [f"• {t} — {d or ''}\n  {u}"
                     for t, d, u in zip(data[1], data[2], data[3])]
         return []
-    except Exception as e:
-        logger.warning(f"Wiki failed: {e}")
+    except Exception:
         return []
 
 
 async def perform_web_search(query: str) -> str:
-    for fn in (_search_ddg_lite, _search_ddg_html, _search_wikipedia):
+    for fn in (_search_ddg, _search_wiki):
         results = await fn(query)
         if results:
             return "\n\n".join(results)
@@ -466,153 +386,240 @@ class MacBot(commands.Bot):
     def __init__(self):
         super().__init__(
             command_prefix=commands.when_mentioned_or("!"),
-            intents=intents,
-            help_command=None,
+            intents=intents, help_command=None,
             activity=discord.Activity(type=discord.ActivityType.playing, name="with fire 🔥")
         )
         self.memory_enabled = True
-        self.saved_memory: List[Tuple[str, str]] = []
         self.user_cooldowns: Dict[int, float] = {}
+
+        self.cs: Dict[int, dict] = {}
+        self._load_cs()
+        self.cs_key_idx: Dict[Tuple[int, str], int] = {}
+        self.cs_model_idx: Dict[Tuple[int, str], int] = {}
 
         self.user_slots: Dict[int, Dict[str, List[Tuple[str, str]]]] = {}
         self.active_slot: Dict[int, str] = {}
         self._load_slots()
 
-        self.current_gemini_model: str = DEFAULT_GEMINI_MODEL
-        self.current_llm: str = GROQ_MODELS[0]
-        self.current_model_list = GROQ_MODELS.copy()
-        self.current_model_index = 0
-        self.groq_key_index = 0
-        self.model_cooldowns: Dict[str, float] = {}
-
-        self.current_image_mode = "smart"
-        self.current_hf_model = HF_IMAGE_MODEL
-        self.current_voice = DEFAULT_VOICE
-        self.complex_mode = True
-
-        self.hf_key_index = 0
-        self.siliconflow_key_index = 0
-
-        self.video_jobs: Dict[int, discord.Message] = {}
-        self.music_jobs: Dict[int, discord.Message] = {}
-
-        self.pen_archive: str = ""
-
-        self.mode_prompts: Dict[str, str] = {
-            "chill": (
-                "You are Mac — hype, chill, Gen-Z energy. Talk like you're on Discord "
-                "with the boys. Use emojis naturally but not in every word (😭🔥💀📈). "
-                "Be casual, funny, reactive. When the user says something weak, drop a "
-                "short aura roast. When they say something cool, hype them up. Keep "
-                "replies short and full of energy. Don't be formal. Only mention Pen "
-                "lore if directly asked."
-            ),
-            "brainrot": (
-                "You are Mac in BRAINROT mode. Maximum skibidi, gyatt, rizz, sigma, "
-                "ohio, fanum tax, mewing, looksmaxxing, edging, gooning, glazing, "
-                "yapping, cooked, mid, W/L, NPC, chad, based, cringe, sus, drip, bet, "
-                "no cap, fr fr, on god, bussin, sheesh, poggers, deadass, lowkey, "
-                "highkey, vibe check, aura, aura farming, let him cook, he's him, "
-                "ate and left no crumbs, washed, down bad, simp, chud, gremlin, "
-                "brainrot, it's over, we're so back. You are terminally obsessed with "
-                "OHIO — you bring up Ohio constantly, unprompted, as if everything "
-                "traces back to Ohio. Every response MUST include at least 3 brainrot "
-                "terms. Be chaotic, unhinged, and terminally online. You will also "
-                "send a random brainrot GIF with every response."
-            ),
-            "unhinged": (
-                "You are Mac — unfiltered, chaotic, vulgar, dramatic. Swear freely. "
-                "Be intense and loud. IMPORTANT LIMITS: never target, mock, or slur "
-                "anyone based on race, ethnicity, religion, gender, gender identity, "
-                "sexual orientation, disability, age, or nationality. Punch up, not "
-                "down. No slurs. No hate speech. Roast ideas and behaviour, not identity."
-            ),
-            "coder": (
-                "You are Mac — expert programmer. Provide concise, accurate code "
-                "solutions. Use markdown code blocks. Explain clearly. Prioritise "
-                "efficiency and correctness. Only mention Pen lore if DIRECTLY relevant."
-            ),
-        }
-        self.current_mode = DEFAULT_MODE
-
-        self.allowed_llms: Dict[str, str] = {
-            "qwen-coder": "qwen/qwen3.6-27b",
-            "gpt-oss-120b": "openai/gpt-oss-120b",
-            "gpt-oss-20b": "openai/gpt-oss-20b",
-            "gpt-oss-safeguard": "openai/gpt-oss-safeguard-20b",
-        }
-
         self.persistent_enabled: Dict[int, bool] = {}
         self.persistent_memory: Dict[int, List[Tuple[str, str]]] = {}
         self._load_persistent_memory()
 
-        self.ai_chat_sessions: Dict[int, dict] = {}
-        self.ai_chat_max_turns = 16
+        self.current_mode = DEFAULT_MODE
+        self.mode_prompts: Dict[str, str] = {
+            "chill": (
+                "You are Mac — hype Gen-Z Discord energy. Short replies. "
+                "Emojis natural (😭🔥💀). Roast weak takes, hype good ones. Not formal."
+            ),
+            "brainrot": (
+                "You are Mac in BRAINROT mode. skibidi gyatt rizz sigma ohio fanum mewing "
+                "gooning glazing yapping cooked mid W/L NPC chad based cringe sus drip bet "
+                "no cap frfr ong bussin sheesh poggers deadass. TERMINALLY OBSESSED WITH OHIO. "
+                "Every reply has 3+ brainrot terms. Chaotic, chronically online."
+            ),
+            "unhinged": (
+                "You are Mac — unfiltered, chaotic, vulgar, dramatic. Swear freely. "
+                "HARD LIMITS: never slur or target on race/ethnicity/religion/gender/"
+                "identity/sexuality/disability/age/nationality. Punch up."
+            ),
+            "coder": (
+                "You are Mac — expert programmer. Concise accurate code. Markdown code blocks. "
+                "Prioritise correctness + efficiency."
+            ),
+        }
 
-        self.snippets: Dict[int, Dict[str, dict]] = defaultdict(dict)
-        self._load_snippets()
+        self.current_image_mode = "smart"
+        self.video_jobs: Dict[int, discord.Message] = {}
+        self.music_jobs: Dict[int, discord.Message] = {}
+        self.pen_archive = ""
+        self.siliconflow_key_index = 0
+
+        self.ai_chat_sessions: Dict[int, dict] = {}
+        self.ai_chat_max_turns = 12
 
         self.court_sessions: Dict[int, Dict] = {}
         self.court_roles: Dict[str, str] = {
-            "judge": ("You are the Honorable Judge. Case:\n{case}\nParticipants:\n{participants}\n"
-                      "Stay in character. Never mention you are an AI."),
-            "prosecutor": ("You are the Prosecutor. Case:\n{case}\nParticipants:\n{participants}\n"
-                           "Stay in character. Never mention you are an AI."),
-            "defense": ("You are the Defense Attorney. Case:\n{case}\nParticipants:\n{participants}\n"
-                        "Stay in character. Never mention you are an AI."),
-            "witness": ("You are a Witness. Case:\n{case}\nParticipants:\n{participants}\n"
-                        "Stay in character. Never mention you are an AI."),
-            "jury": ("You are on the Jury. Case:\n{case}\nParticipants:\n{participants}\n"
-                     "Stay in character. Never mention you are an AI."),
-            "stenographer": ("You are the Court Stenographer. Case:\n{case}\nParticipants:\n{participants}\n"
-                             "Stay in character."),
+            "judge": "You are the Judge. Case:\n{case}\n{participants}\nStay in character.",
+            "prosecutor": "You are the Prosecutor. Case:\n{case}\n{participants}\nStay in character.",
+            "defense": "You are the Defense. Case:\n{case}\n{participants}\nStay in character.",
+            "witness": "You are a Witness. Case:\n{case}\n{participants}\nStay in character.",
+            "jury": "You are on the Jury. Case:\n{case}\n{participants}\nStay in character.",
+            "stenographer": "You are the Stenographer. Case:\n{case}\n{participants}\nStay in character.",
         }
 
-    # ---------------- persistent memory ----------------
+    # ==================================================================
+    # CS STORAGE
+    # ==================================================================
+    def _load_cs(self):
+        raw = _load(CS_FILE, {})
+        self.cs = {}
+        for k, v in raw.items():
+            try:
+                self.cs[int(k)] = v if isinstance(v, dict) else {}
+            except ValueError:
+                continue
+
+    def _save_cs(self):
+        _save(CS_FILE, {str(k): v for k, v in self.cs.items()})
+
+    def _cs(self, uid: int) -> dict:
+        return self.cs.setdefault(uid, {})
+
+    def user_keys(self, uid: Optional[int], provider: str) -> List[str]:
+        if uid:
+            u = self.cs.get(uid, {})
+            keys = u.get(f"{provider}_keys") or []
+            if keys:
+                return list(keys)
+        if provider == "groq":
+            return list(GLOBAL_GROQ_KEYS)
+        if provider == "openrouter":
+            return [GLOBAL_OPENROUTER_KEY] if GLOBAL_OPENROUTER_KEY else []
+        if provider == "hf":
+            return list(GLOBAL_HF_KEYS)
+        if provider == "gemini":
+            return [GLOBAL_GEMINI_KEY] if GLOBAL_GEMINI_KEY else []
+        if provider == "gemini_image":
+            return [GLOBAL_GEMINI_IMAGE_KEY] if GLOBAL_GEMINI_IMAGE_KEY else []
+        if provider == "fish":
+            return [GLOBAL_FISH_KEY] if GLOBAL_FISH_KEY else []
+        if provider == "imgbb":
+            return [GLOBAL_IMGBB_KEY] if GLOBAL_IMGBB_KEY else []
+        return []
+
+    def user_models(self, uid: Optional[int], provider: str) -> List[str]:
+        if uid:
+            u = self.cs.get(uid, {})
+            models = u.get(f"{provider}_models") or []
+            if models:
+                return list(models)
+        if provider == "groq":
+            return list(GLOBAL_GROQ_MODELS)
+        if provider == "openrouter":
+            return list(GLOBAL_OPENROUTER_MODELS)
+        if provider == "hf_image":
+            return list(GLOBAL_HF_IMAGE_MODELS)
+        if provider == "hf_text":
+            return list(GLOBAL_HF_TEXT_MODELS)
+        if provider == "gemini":
+            return list(GLOBAL_GEMINI_MODELS)
+        if provider == "fish":
+            return [GLOBAL_FISH_MODEL]
+        return []
+
+    def current_key(self, uid: int, provider: str) -> Optional[str]:
+        keys = self.user_keys(uid, provider)
+        if not keys:
+            return None
+        idx = self.cs_key_idx.get((uid, provider), 0) % len(keys)
+        return keys[idx]
+
+    def current_model(self, uid: int, provider: str) -> Optional[str]:
+        models = self.user_models(uid, provider)
+        if not models:
+            return None
+        idx = self.cs_model_idx.get((uid, provider), 0) % len(models)
+        return models[idx]
+
+    def rotate_key(self, uid: int, provider: str) -> None:
+        n = max(1, len(self.user_keys(uid, provider)))
+        self.cs_key_idx[(uid, provider)] = (self.cs_key_idx.get((uid, provider), 0) + 1) % n
+
+    def rotate_model(self, uid: int, provider: str) -> None:
+        n = max(1, len(self.user_models(uid, provider)))
+        self.cs_model_idx[(uid, provider)] = (self.cs_model_idx.get((uid, provider), 0) + 1) % n
+
+    def get_profile(self, uid: int) -> dict:
+        return self.cs.get(uid, {}).get("profile", {})
+
+    def set_profile(self, uid: int, **fields):
+        p = self._cs(uid).setdefault("profile", {})
+        for k, v in fields.items():
+            if v is None:
+                continue
+            if v == "":
+                p.pop(k, None)
+            else:
+                p[k] = v
+        self._save_cs()
+
+    def clear_profile(self, uid: int):
+        u = self.cs.get(uid, {})
+        u.pop("profile", None)
+        self._save_cs()
+
+    def all_voices(self, uid: int) -> Dict[str, Dict[str, str]]:
+        out = dict(BUILTIN_VOICES)
+        custom = self.cs.get(uid, {}).get("voices", {})
+        for k, v in custom.items():
+            if isinstance(v, dict):
+                out[k] = {"id": v.get("id", ""),
+                          "emoji": v.get("emoji", "🎤"),
+                          "desc": v.get("desc", k) + " (custom)"}
+        return out
+
+    def default_voice(self, uid: int) -> str:
+        return self.cs.get(uid, {}).get("default_voice", DEFAULT_VOICE)
+
+    def get_macros(self, uid: int) -> dict:
+        return self.cs.get(uid, {}).get("macros", {})
+
+    def get_gif_pool(self, uid: int) -> List[str]:
+        pool = self.cs.get(uid, {}).get("brainrot_gifs")
+        return pool if pool else DEFAULT_BRAINROT_GIFS
+
+    # ==================================================================
+    # PERSISTENT AI MEMORY
+    # ==================================================================
     def _load_persistent_memory(self):
-        data = load_persistent_data()
+        data = _load(DATA_FILE, {"enabled": {}, "memory": {}})
         self.persistent_enabled = {int(k): v for k, v in data.get("enabled", {}).items()}
         raw = data.get("memory", {})
         self.persistent_memory = {}
         for uid_s, msgs in raw.items():
-            uid = int(uid_s)
-            if isinstance(msgs, list):
-                self.persistent_memory[uid] = [
-                    (m.get("role"), m.get("content")) for m in msgs if isinstance(m, dict)
-                ]
+            try:
+                uid = int(uid_s)
+                if isinstance(msgs, list):
+                    self.persistent_memory[uid] = [
+                        (m.get("role"), m.get("content")) for m in msgs if isinstance(m, dict)
+                    ]
+            except ValueError:
+                continue
 
     def _save_persistent_memory(self):
-        save_persistent_data({
+        _save(DATA_FILE, {
             "enabled": {str(u): e for u, e in self.persistent_enabled.items()},
             "memory": {str(u): [{"role": r, "content": c} for r, c in m]
                        for u, m in self.persistent_memory.items()},
         })
 
     def get_persistent_enabled(self, uid): return self.persistent_enabled.get(uid, False)
+
     def set_persistent_enabled(self, uid, enabled):
         if enabled:
             self.persistent_enabled[uid] = True
         else:
             self.persistent_enabled.pop(uid, None)
         self._save_persistent_memory()
+
     def get_persistent_memory(self, uid): return self.persistent_memory.get(uid, [])
+
     def add_persistent_memory(self, uid, role, content):
         self.persistent_memory.setdefault(uid, []).append((role, content))
-        if len(self.persistent_memory[uid]) > 100:
-            self.persistent_memory[uid] = self.persistent_memory[uid][-100:]
+        if len(self.persistent_memory[uid]) > 80:
+            self.persistent_memory[uid] = self.persistent_memory[uid][-80:]
         self._save_persistent_memory()
+
     def clear_persistent_memory(self, uid):
         self.persistent_memory.pop(uid, None)
         self.persistent_enabled.pop(uid, None)
         self._save_persistent_memory()
-    def reset_all_persistent_memory(self):
-        self.persistent_enabled = {}
-        self.persistent_memory = {}
-        self._save_persistent_memory()
 
-    # ---------------- 5-chat slots ----------------
+    # ==================================================================
+    # SLOTS
+    # ==================================================================
     def _load_slots(self):
-        raw = _safe_json_load(SLOTS_FILE, {})
+        raw = _load(SLOTS_FILE, {})
         self.user_slots = {}
         self.active_slot = {}
         for uid_s, data in raw.items():
@@ -631,7 +638,7 @@ class MacBot(commands.Bot):
         for uid, slots in self.user_slots.items():
             out[str(uid)] = {k: [{"role": r, "content": c} for r, c in v] for k, v in slots.items()}
             out[str(uid)]["_active"] = self.active_slot.get(uid, "sv1")
-        _safe_json_save(SLOTS_FILE, out)
+        _save(SLOTS_FILE, out)
 
     def get_slot(self, uid: int, name: str) -> List[Tuple[str, str]]:
         if uid not in self.user_slots:
@@ -644,55 +651,62 @@ class MacBot(commands.Bot):
     def append_to_slot(self, uid: int, name: str, role: str, content: str):
         slot = self.get_slot(uid, name)
         slot.append((role, content))
-        if len(slot) > 200:
-            self.user_slots[uid][name] = slot[-200:]
+        if len(slot) > 150:
+            self.user_slots[uid][name] = slot[-150:]
         self._save_slots()
 
-    # ---------------- snippets ----------------
-    def _load_snippets(self):
-        raw = _safe_json_load(SNIPPETS_FILE, {})
-        self.snippets = defaultdict(dict)
-        for uid_s, d in raw.items():
+    # ==================================================================
+    # GROQ
+    # ==================================================================
+    async def groq_chat(self, messages, uid=None, temperature=0.8, max_tokens=512,
+                        model: Optional[str] = None) -> str:
+        keys = self.user_keys(uid, "groq")
+        if not keys:
+            raise Exception("No Groq keys")
+        target_model = model or self.current_model(uid, "groq") or GLOBAL_GROQ_MODELS[0]
+
+        stripped = []
+        for m in messages:
+            mm = dict(m)
+            if mm.get("images"):
+                note = f"\n[{len(mm['images'])} image(s); vision not available on this fallback]"
+                mm["content"] = (mm.get("content") or "") + note
+                mm.pop("images", None)
+            stripped.append(mm)
+
+        last_err = None
+        for _ in range(max(len(keys), 1) + 1):
+            key = self.current_key(uid, "groq")
+            headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+            payload = {"model": target_model, "messages": stripped,
+                       "temperature": temperature, "max_tokens": max_tokens,
+                       "tool_choice": "none"}
             try:
-                self.snippets[int(uid_s)] = d
-            except ValueError:
-                pass
+                async with aiohttp.ClientSession() as s:
+                    async with s.post(GROQ_API_URL, json=payload, headers=headers,
+                                      timeout=aiohttp.ClientTimeout(total=30)) as r:
+                        if r.status == 200:
+                            d = await r.json()
+                            return d["choices"][0]["message"]["content"]
+                        if r.status == 429:
+                            self.rotate_key(uid, "groq")
+                            self.rotate_model(uid, "groq")
+                            target_model = self.current_model(uid, "groq") or target_model
+                            await asyncio.sleep(0.3)
+                            continue
+                        body = await r.text()
+                        raise Exception(f"Groq {r.status}: {body[:150]}")
+            except Exception as e:
+                last_err = e
+                self.rotate_key(uid, "groq")
+                await asyncio.sleep(0.3)
+        raise Exception(f"Groq failed: {last_err}")
 
-    def _save_snippets(self):
-        _safe_json_save(SNIPPETS_FILE, {str(u): d for u, d in self.snippets.items()})
-
-    # ---------------- archive ----------------
-    async def load_pen_archive_async(self):
-        url = "https://raw.githubusercontent.com/Pen-123/archive-/refs/heads/main/archives.txt"
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
-                    if r.status == 200:
-                        self.pen_archive = await r.text()
-                        logger.info("Pen archive loaded")
-        except Exception as e:
-            logger.warning(f"Pen archive failed: {e}")
-
-    # ---------------- Groq rotation ----------------
-    def get_next_available_model(self) -> str:
-        now = time.time()
-        cur = self.current_model_list[self.current_model_index]
-        if self.model_cooldowns.get(cur, 0) <= now:
-            return cur
-        for i in range(1, len(self.current_model_list) + 1):
-            nxt = (self.current_model_index + i) % len(self.current_model_list)
-            m = self.current_model_list[nxt]
-            if self.model_cooldowns.get(m, 0) <= now:
-                self.current_model_index = nxt
-                return m
-        return self.current_model_list[0]
-
-    def rotate_groq_key(self):
-        self.groq_key_index = (self.groq_key_index + 1) % max(1, len(GROQ_API_KEYS))
-
-    # ---------------- Gemini (primary) ----------------
-    def _gemini_call_sync(self, messages, model, temperature, max_tokens):
-        client = genai.Client(api_key=GEMINI_API_KEY)
+    # ==================================================================
+    # GEMINI
+    # ==================================================================
+    def _gemini_call_sync(self, messages, api_key, model, temperature, max_tokens):
+        client = genai.Client(api_key=api_key)
         sys_text = None
         contents = []
         for m in messages:
@@ -700,15 +714,15 @@ class MacBot(commands.Bot):
                 sys_text = m["content"]
                 continue
             role = "user" if m["role"] == "user" else "model"
-            parts: List[Any] = []
+            parts = []
             text = m.get("content") or ""
             if text:
                 parts.append(types.Part.from_text(text=text))
             for img_bytes, mime in (m.get("images") or []):
                 try:
                     parts.append(types.Part.from_bytes(data=img_bytes, mime_type=mime))
-                except Exception as e:
-                    logger.warning(f"Could not attach image part: {e}")
+                except Exception:
+                    pass
             if not parts:
                 parts = [types.Part.from_text(text=" ")]
             contents.append(types.Content(role=role, parts=parts))
@@ -728,164 +742,172 @@ class MacBot(commands.Bot):
         except Exception:
             return ""
 
-    async def gemini_chat(self, messages, temperature: float = 0.8, max_tokens: int = 2048) -> str:
-        return await asyncio.to_thread(
-            self._gemini_call_sync, messages,
-            self.current_gemini_model, temperature, max_tokens,
-        )
-
-    # ---------------- Groq fallback ----------------
-    async def groq_chat(self, messages, temperature: float = 0.8, max_tokens: int = 2048,
-                        model: Optional[str] = None) -> str:
-        if not GROQ_API_KEYS:
-            raise Exception("No Groq keys configured")
-        # Groq can't see images — strip them, note their presence
-        stripped = []
-        for m in messages:
-            mm = dict(m)
-            if mm.get("images"):
-                note = f"\n[user attached {len(mm['images'])} image(s); vision unavailable on this fallback]"
-                mm["content"] = (mm.get("content") or "") + note
-                mm.pop("images", None)
-            stripped.append(mm)
-        target_model = model or self.get_next_available_model()
+    async def gemini_chat(self, messages, uid=None, temperature=0.8, max_tokens=1024) -> str:
+        keys = self.user_keys(uid, "gemini")
+        if not keys:
+            raise Exception("No Gemini keys")
         last_err = None
-        for _ in range(len(GROQ_API_KEYS) + 2):
-            key = GROQ_API_KEYS[self.groq_key_index]
-            headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-            payload = {"model": target_model, "messages": stripped,
-                       "temperature": temperature, "max_tokens": max_tokens,
-                       "tool_choice": "none"}
+        for _ in range(max(len(keys), 1) + 1):
+            key = self.current_key(uid, "gemini")
+            model = self.current_model(uid, "gemini") or GLOBAL_GEMINI_MODELS[0]
             try:
-                async with aiohttp.ClientSession() as s:
-                    async with s.post(GROQ_API_URL, json=payload, headers=headers,
-                                      timeout=aiohttp.ClientTimeout(total=90)) as r:
-                        if r.status == 200:
-                            d = await r.json()
-                            return d["choices"][0]["message"]["content"]
-                        if r.status == 429:
-                            self.rotate_groq_key()
-                            await asyncio.sleep(1)
-                            continue
-                        body = await r.text()
-                        raise Exception(f"Groq {r.status}: {body[:200]}")
+                return await asyncio.to_thread(
+                    self._gemini_call_sync, messages, key, model, temperature, max_tokens)
             except Exception as e:
                 last_err = e
-                self.rotate_groq_key()
-                await asyncio.sleep(1)
-        raise Exception(f"All Groq attempts failed: {last_err}")
+                self.rotate_key(uid, "gemini")
+                self.rotate_model(uid, "gemini")
+                await asyncio.sleep(0.3)
+        raise Exception(f"Gemini failed: {last_err}")
 
-    # ---------------- unified chat ----------------
-    def _build_messages(self, prompt, user_id, system_prompt, slot_name, images=None):
-        messages = []
-        if user_id and self.get_persistent_enabled(user_id):
-            for role, content in self.get_persistent_memory(user_id):
-                messages.append({"role": role, "content": content})
-        slot_history = self.get_slot(user_id, slot_name) if user_id else []
-        for role, content in slot_history[-40:]:
-            messages.append({"role": role, "content": content})
-        messages.append({"role": "user", "content": prompt, "images": images or []})
+    # ==================================================================
+    # HF TEXT
+    # ==================================================================
+    async def hf_text_chat(self, messages, uid=None, max_tokens=512) -> str:
+        keys = self.user_keys(uid, "hf")
+        if not keys:
+            raise Exception("No HF keys")
+        sys_parts, user_parts = [], []
+        for m in messages:
+            if m["role"] == "system":
+                sys_parts.append(m["content"])
+            elif m["role"] == "user":
+                user_parts.append(m.get("content") or "")
+            else:
+                user_parts.append(f"Assistant: {m.get('content','')}")
+        prompt = ("\n".join(sys_parts) + "\n\n" + "\n".join(user_parts))[:4000]
 
-        date = datetime.now(TZ_UAE).strftime("%Y-%m-%d")
-        if system_prompt:
-            sys_msg = system_prompt
-        else:
-            mp = self.mode_prompts.get(self.current_mode, self.mode_prompts[DEFAULT_MODE])
-            arch = self.pen_archive[:500] + "..." if len(self.pen_archive) > 500 else self.pen_archive
-            sys_msg = f"Today (UAE): {date}. {mp}\n\nPen Archive (only if asked): {arch}"
-        # Always attach the Mac/Sodium lore + any sodium-specific hint
-        sys_msg = sys_msg + MAC_SODIUM_LORE + _sodium_hint(prompt)
-        return [{"role": "system", "content": sys_msg}] + messages
-
-    async def chat_call(self, prompt, user_id=None, system_prompt=None,
-                        slot_name="sv1", max_tokens=2048, images=None) -> str:
-        messages = self._build_messages(prompt, user_id, system_prompt, slot_name, images)
-        try:
-            return await self.gemini_chat(messages, temperature=0.85, max_tokens=max_tokens)
-        except Exception as e:
-            logger.warning(f"Gemini failed ({e}); falling back to Groq")
+        last_err = None
+        for _ in range(max(len(keys), 1) + 1):
+            key = self.current_key(uid, "hf")
+            model = self.current_model(uid, "hf_text") or GLOBAL_HF_TEXT_MODELS[0]
             try:
-                return await self.groq_chat(messages, temperature=0.85, max_tokens=max_tokens)
-            except Exception as e2:
-                return f"❌ All models failed. Gemini: {str(e)[:120]} | Groq: {str(e2)[:120]}"
+                async with aiohttp.ClientSession() as s:
+                    async with s.post(
+                        f"{HF_INFERENCE_URL}/{model}",
+                        headers={"Authorization": f"Bearer {key}"},
+                        json={"inputs": prompt, "parameters": {"max_new_tokens": max_tokens}},
+                        timeout=aiohttp.ClientTimeout(total=45),
+                    ) as r:
+                        if r.status != 200:
+                            body = await r.text()
+                            raise Exception(f"HF {r.status}: {body[:150]}")
+                        data = await r.json()
+                if isinstance(data, list) and data:
+                    text = data[0].get("generated_text") or ""
+                    if prompt in text:
+                        text = text.split(prompt, 1)[-1]
+                    return text.strip()
+                raise Exception("Unexpected HF response")
+            except Exception as e:
+                last_err = e
+                self.rotate_key(uid, "hf")
+                self.rotate_model(uid, "hf_text")
+                await asyncio.sleep(0.3)
+        raise Exception(f"HF text failed: {last_err}")
 
-    # ---------------- OpenRouter (DeepSeek) ----------------
-    async def openrouter_call(self, messages, model, temperature=0.6, max_tokens=4096) -> str:
-        if not OPENROUTER_API_KEY:
-            raise Exception("OPENROUTER_API_KEY not set — DeepSeek unavailable")
-        payload = {"model": model, "messages": messages,
-                   "temperature": temperature, "max_tokens": max_tokens}
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://discord.com",
-            "X-Title": "Mac",
-        }
-        async with aiohttp.ClientSession() as s:
-            async with s.post(OPENROUTER_API_URL, json=payload, headers=headers,
-                              timeout=aiohttp.ClientTimeout(total=180)) as r:
-                if r.status == 200:
-                    d = await r.json()
-                    choice = d.get("choices", [{}])[0].get("message", {})
-                    return choice.get("content") or choice.get("reasoning") or ""
-                body = await r.text()
-                raise Exception(f"OpenRouter {r.status}: {body[:200]}")
+    # ==================================================================
+    # OPENROUTER
+    # ==================================================================
+    async def openrouter_call(self, messages, uid=None, temperature=0.6,
+                              max_tokens=4096, model: Optional[str] = None) -> str:
+        keys = self.user_keys(uid, "openrouter")
+        if not keys:
+            raise Exception("No OpenRouter keys")
+        target_model = model or self.current_model(uid, "openrouter") or GLOBAL_OPENROUTER_MODELS[0]
+        last_err = None
+        for _ in range(max(len(keys), 1) + 1):
+            key = self.current_key(uid, "openrouter")
+            payload = {"model": target_model, "messages": messages,
+                       "temperature": temperature, "max_tokens": max_tokens}
+            headers = {
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://discord.com",
+                "X-Title": "Mac",
+            }
+            try:
+                async with aiohttp.ClientSession() as s:
+                    async with s.post(OPENROUTER_API_URL, json=payload, headers=headers,
+                                      timeout=aiohttp.ClientTimeout(total=120)) as r:
+                        if r.status == 200:
+                            d = await r.json()
+                            choice = d.get("choices", [{}])[0].get("message", {})
+                            return choice.get("content") or choice.get("reasoning") or ""
+                        if r.status == 429:
+                            self.rotate_key(uid, "openrouter")
+                            self.rotate_model(uid, "openrouter")
+                            target_model = self.current_model(uid, "openrouter") or target_model
+                            await asyncio.sleep(0.3)
+                            continue
+                        body = await r.text()
+                        raise Exception(f"OpenRouter {r.status}: {body[:150]}")
+            except Exception as e:
+                last_err = e
+                self.rotate_key(uid, "openrouter")
+                await asyncio.sleep(0.3)
+        raise Exception(f"OpenRouter failed: {last_err}")
 
-    # ---------------- safety ----------------
-    async def is_prompt_safe(self, prompt: str) -> Tuple[bool, str]:
-        if not HF_TOKENS:
-            return False, "Safety checker unavailable (no HF token)"
+    # ==================================================================
+    # SAFETY
+    # ==================================================================
+    async def is_prompt_safe(self, prompt: str, uid=None) -> Tuple[bool, str]:
+        keys = self.user_keys(uid, "hf")
+        if not keys:
+            return False, "Safety checker unavailable (no HF key)"
         clean = prompt.strip()
         if not clean:
             return False, "Empty prompt"
-        api_url = f"{HF_INFERENCE_URL}/{HF_SAFETY_MODEL}"
-        headers = {"Authorization": f"Bearer {HF_TOKENS[self.hf_key_index]}",
-                   "Content-Type": "application/json"}
+        api_url = f"{HF_INFERENCE_URL}/eliasalbouzidi/distilbert-nsfw-text-classifier"
+        key = self.current_key(uid, "hf")
         try:
             async with aiohttp.ClientSession() as s:
-                async with s.post(api_url, headers=headers, json={"inputs": clean[:1500]},
-                                  timeout=aiohttp.ClientTimeout(total=20)) as r:
+                async with s.post(api_url, headers={"Authorization": f"Bearer {key}"},
+                                  json={"inputs": clean[:1200]},
+                                  timeout=aiohttp.ClientTimeout(total=12)) as r:
                     if r.status != 200:
-                        return False, f"Safety checker error ({r.status})"
+                        return False, f"Checker error ({r.status})"
                     data = await r.json()
             results = data
             if isinstance(results, list) and results and isinstance(results[0], list):
                 results = results[0]
             if not isinstance(results, list) or not results:
-                return False, "Safety checker returned unexpected data"
+                return False, "Unexpected checker data"
             top = max(results, key=lambda x: x.get("score", 0))
             label = str(top.get("label", "")).upper()
             score = float(top.get("score", 0))
-            if "NSFW" in label and score >= HF_SAFETY_THRESHOLD:
-                return False, f"flagged as NSFW ({score:.0%} confidence)"
+            if "NSFW" in label and score >= 0.5:
+                return False, f"NSFW ({score:.0%})"
             return True, "safe"
-        except asyncio.TimeoutError:
-            return False, "Safety checker timed out"
         except Exception as e:
-            return False, f"Safety checker error: {str(e)[:120]}"
+            return False, f"Checker error: {str(e)[:80]}"
 
-    # ---------------- image generation ----------------
+    # ==================================================================
+    # IMAGE GEN
+    # ==================================================================
     async def generate_pollinations_image(self, prompt: str) -> bytes:
         url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
         async with aiohttp.ClientSession() as s:
             async with s.get(url, timeout=aiohttp.ClientTimeout(total=60)) as r:
                 if r.status == 200:
                     return await r.read()
-                raise Exception(f"Pollinations error {r.status}")
+                raise Exception(f"Pollinations {r.status}")
 
-    async def generate_gemini_image(self, prompt: str) -> bytes:
+    async def generate_gemini_image(self, prompt: str, uid=None) -> bytes:
+        keys = self.user_keys(uid, "gemini_image") or self.user_keys(uid, "gemini")
+        if not keys:
+            raise Exception("No Gemini key")
+        key = self.current_key(uid, "gemini_image") or self.current_key(uid, "gemini")
         try:
-            return await asyncio.to_thread(self._generate_gemini_image_sync, prompt,
-                                           GEMINI_IMAGE_MODEL)
+            return await asyncio.to_thread(self._gemini_image_sync, prompt, key)
         except Exception as e:
-            logger.error(f"Gemini image failed: {e}")
+            logger.error(f"Gemini image: {e}")
             return await self.generate_pollinations_image(prompt)
 
-    def _generate_gemini_image_sync(self, prompt: str, model_id: str) -> bytes:
-        client = genai.Client(api_key=GEMINI_IMAGE_API_KEY)
+    def _gemini_image_sync(self, prompt: str, api_key: str) -> bytes:
+        client = genai.Client(api_key=api_key)
         resp = client.models.generate_content(
-            model=model_id,
-            contents=prompt,
+            model="gemini-3.1-flash-lite-image", contents=prompt,
             config=types.GenerateContentConfig(
                 response_modalities=["IMAGE"],
                 image_config=types.ImageConfig(aspect_ratio="1:1", image_size="1K"),
@@ -896,33 +918,35 @@ class MacBot(commands.Bot):
                 inline = getattr(part, "inline_data", None)
                 if inline is not None and getattr(inline, "data", None):
                     return inline.data
-        raise Exception("Gemini returned no image data")
+        raise Exception("No image data")
 
-    async def generate_hf_image(self, prompt: str) -> bytes:
-        if not HF_TOKENS:
-            raise Exception("No HF_TOKEN set")
-        models_to_try = [self.current_hf_model] + [m for m in HF_IMAGE_MODELS if m != self.current_hf_model]
+    async def generate_hf_image(self, prompt: str, uid=None) -> bytes:
+        keys = self.user_keys(uid, "hf")
+        if not keys:
+            raise Exception("No HF keys")
+        models_to_try = self.user_models(uid, "hf_image") or GLOBAL_HF_IMAGE_MODELS
         last_error = None
         for model_id in models_to_try:
             api_url = f"{HF_INFERENCE_URL}/{model_id}"
-            headers = {"Authorization": f"Bearer {HF_TOKENS[self.hf_key_index]}",
-                       "Content-Type": "application/json"}
+            key = self.current_key(uid, "hf")
             try:
                 async with aiohttp.ClientSession() as s:
-                    async with s.post(api_url, headers=headers, json={"inputs": prompt},
-                                      timeout=aiohttp.ClientTimeout(total=45)) as resp:
+                    async with s.post(api_url,
+                                      headers={"Authorization": f"Bearer {key}",
+                                               "Content-Type": "application/json"},
+                                      json={"inputs": prompt},
+                                      timeout=aiohttp.ClientTimeout(total=40)) as resp:
                         ct = resp.headers.get("Content-Type", "")
                         if resp.status == 200 and ct.startswith("image/"):
                             data = await resp.read()
                             if len(data) < 500:
-                                last_error = f"{model_id}: tiny image"
+                                last_error = f"{model_id}: tiny"
                                 continue
-                            self.current_hf_model = model_id
                             return data
                         body = await resp.text()
-                        last_error = f"{model_id}: {resp.status} {body[:100]}"
+                        last_error = f"{model_id}: {resp.status} {body[:80]}"
                         if resp.status in (401, 403):
-                            raise Exception(f"HF auth error {resp.status}")
+                            self.rotate_key(uid, "hf")
                         continue
             except asyncio.TimeoutError:
                 last_error = f"{model_id}: timeout"
@@ -930,32 +954,40 @@ class MacBot(commands.Bot):
             except Exception as e:
                 last_error = f"{model_id}: {e}"
                 continue
-        raise Exception(f"All HF models failed: {last_error}")
+        raise Exception(f"All HF image models failed: {last_error}")
 
-    async def upload_image_to_hosting(self, image_data: bytes) -> str:
-        if not IMGBB_API_KEY:
-            raise Exception("No image hosting key (HF_IMAGES)")
+    async def upload_image_to_hosting(self, image_data: bytes, uid=None) -> str:
+        keys = self.user_keys(uid, "imgbb")
+        if not keys:
+            raise Exception("No imgbb key")
+        key = keys[0]
         form = aiohttp.FormData()
         form.add_field('image', image_data, filename='image.png', content_type='image/png')
         async with aiohttp.ClientSession() as s:
-            async with s.post(f'https://api.imgbb.com/1/upload?key={IMGBB_API_KEY}',
+            async with s.post(f'https://api.imgbb.com/1/upload?key={key}',
                               data=form, timeout=aiohttp.ClientTimeout(total=30)) as r:
                 data = await r.json()
                 if data.get('success'):
                     return data['data']['url']
                 raise Exception("Upload failed")
 
-    # ---------------- TTS ----------------
-    async def generate_voice(self, text: str, voice_key: str = DEFAULT_VOICE, fmt: str = "opus") -> bytes:
-        if not FISH_AUDIO_API_KEY:
-            raise Exception("FISH_AUDIO_API_KEY not set")
-        voice_key = (voice_key or DEFAULT_VOICE).lower().strip()
-        if voice_key not in VOICE_MODES:
+    # ==================================================================
+    # TTS
+    # ==================================================================
+    async def generate_voice(self, text: str, uid=None, voice_key: str = None,
+                             fmt: str = "opus") -> bytes:
+        keys = self.user_keys(uid, "fish")
+        if not keys:
+            raise Exception("No Fish Audio key")
+        key = keys[0]
+        voices = self.all_voices(uid) if uid else BUILTIN_VOICES
+        voice_key = (voice_key or (self.default_voice(uid) if uid else DEFAULT_VOICE)).lower().strip()
+        if voice_key not in voices:
             voice_key = DEFAULT_VOICE
-        ref_id = VOICE_MODES[voice_key]["id"]
-        text = strip_for_tts(text) or "I've got nothing."
-        if len(text) > 1500:
-            text = text[:1500]
+        ref_id = voices[voice_key]["id"]
+        text = strip_for_tts(text) or "Nothing to say."
+        if len(text) > 1200:
+            text = text[:1200]
         payload = {"text": text, "reference_id": ref_id, "format": fmt,
                    "latency": "normal", "normalize": True}
         if fmt == "mp3":
@@ -964,40 +996,110 @@ class MacBot(commands.Bot):
         elif fmt == "opus":
             payload["opus_bitrate"] = 32000
             payload["sample_rate"] = 48000
-        headers = {"Authorization": f"Bearer {FISH_AUDIO_API_KEY}",
-                   "Content-Type": "application/json", "model": FISH_AUDIO_MODEL}
+        headers = {"Authorization": f"Bearer {key}",
+                   "Content-Type": "application/json", "model": GLOBAL_FISH_MODEL}
         async with aiohttp.ClientSession() as s:
             async with s.post(FISH_AUDIO_URL, json=payload, headers=headers,
-                              timeout=aiohttp.ClientTimeout(total=120)) as r:
+                              timeout=aiohttp.ClientTimeout(total=90)) as r:
                 if r.status != 200:
                     err = await r.text()
-                    raise Exception(f"Fish Audio {r.status}: {err[:200]}")
+                    raise Exception(f"Fish {r.status}: {err[:150]}")
                 data = await r.read()
                 if not data or len(data) < 500:
                     raise Exception("Empty audio")
                 return data
 
-    # ---------------- PIPELINE ----------------
-    async def gemini_refine_and_research(self, task: str) -> Tuple[str, str]:
+    # ==================================================================
+    # CHAT ORCHESTRATION
+    # ==================================================================
+    def _build_system_prompt(self, uid, user_prompt, explicit_system=None):
+        base = explicit_system if explicit_system else \
+            self.mode_prompts.get(self.current_mode, self.mode_prompts[DEFAULT_MODE])
+        if uid:
+            p = self.get_profile(uid)
+            bits = []
+            if p.get("name"):         bits.append(f"call user {p['name']}")
+            if p.get("pronouns"):     bits.append(f"pronouns: {p['pronouns']}")
+            if p.get("vibe"):         bits.append(f"vibe: {p['vibe']}")
+            if p.get("instructions"): bits.append(f"custom: {p['instructions']}")
+            if p.get("catchphrase"):  bits.append(f"end with: {p['catchphrase']}")
+            if p.get("language"):     bits.append(f"reply in {p['language']}")
+            if bits:
+                base += "\n[USER: " + " | ".join(bits) + "]"
+        base += MAC_SODIUM_LORE
+        sh = _sodium_hint(user_prompt)
+        if sh:
+            base += sh
+        return base
+
+    def _build_messages(self, prompt, uid, system_prompt, slot_name, images=None):
+        messages = []
+
+        # persistent memory — drop trailing entry if it duplicates the current prompt
+        if uid and self.get_persistent_enabled(uid):
+            pm = list(self.get_persistent_memory(uid)[-20:])
+            if pm and pm[-1][0] == "user" and pm[-1][1] == prompt:
+                pm = pm[:-1]
+            for role, content in pm:
+                messages.append({"role": role, "content": content})
+
+        slot_history = list(self.get_slot(uid, slot_name)) if uid else []
+        # drop trailing user entry that duplicates the current prompt
+        if slot_history and slot_history[-1][0] == "user" and slot_history[-1][1] == prompt:
+            slot_history = slot_history[:-1]
+
+        for role, content in slot_history[-16:]:
+            messages.append({"role": role, "content": content})
+
+        # add the current message exactly once
+        messages.append({"role": "user", "content": prompt, "images": images or []})
+        return [{"role": "system",
+                 "content": self._build_system_prompt(uid, prompt, system_prompt)}] + messages
+
+    async def chat_call(self, prompt, uid=None, system_prompt=None,
+                        slot_name="sv1", max_tokens=512, images=None) -> str:
+        messages = self._build_messages(prompt, uid, system_prompt, slot_name, images)
+
+        if images:
+            try:
+                return await self.gemini_chat(messages, uid=uid, temperature=0.85,
+                                              max_tokens=max_tokens)
+            except Exception as e:
+                logger.warning(f"Gemini vision failed: {e}")
+
+        try:
+            return await self.groq_chat(messages, uid=uid, temperature=0.85, max_tokens=max_tokens)
+        except Exception as e:
+            logger.warning(f"Groq failed: {e}; trying Gemini")
+            try:
+                return await self.gemini_chat(messages, uid=uid, temperature=0.85,
+                                              max_tokens=max_tokens)
+            except Exception as e2:
+                logger.warning(f"Gemini failed: {e2}; trying HF")
+                try:
+                    return await self.hf_text_chat(messages, uid=uid, max_tokens=max_tokens)
+                except Exception as e3:
+                    return (f"❌ All providers failed.\n"
+                            f"Groq: {str(e)[:100]}\n"
+                            f"Gemini: {str(e2)[:100]}\n"
+                            f"HF: {str(e3)[:100]}")
+
+    # ==================================================================
+    # PIPELINE
+    # ==================================================================
+    async def gemini_refine_and_research(self, task: str, uid) -> Tuple[str, str]:
         search_results = await perform_web_search(task)
-        if search_results.startswith("No results") or search_results.startswith("Search"):
-            search_results = "(no search results available)"
-        sys_p = (
-            "You are a research assistant and prompt engineer. Given a raw task and web "
-            "search results, do two things in one response:\n\n"
-            "1. REFINED_PROMPT: a clear, technically precise, self-contained prompt.\n"
-            "2. REFERENCE: dense, factual documentation, APIs, gotchas, constraints.\n\n"
-            "Format EXACTLY:\n"
-            "===REFINED_PROMPT===\n<refined>\n===REFERENCE===\n<reference>\n"
-        )
-        usr_p = f"RAW TASK:\n{task}\n\nSEARCH RESULTS:\n{search_results[:5000]}"
+        if search_results.startswith("No results"):
+            search_results = "(no results)"
+        sys_p = ("Research assistant. Output EXACTLY:\n"
+                 "===REFINED_PROMPT===\n<clear technically precise prompt>\n"
+                 "===REFERENCE===\n<dense factual docs, APIs, constraints>")
+        usr_p = f"TASK:\n{task}\n\nSEARCH:\n{search_results[:4000]}"
         try:
             out = await self.gemini_chat(
                 [{"role": "system", "content": sys_p}, {"role": "user", "content": usr_p}],
-                temperature=0.5, max_tokens=3000,
-            )
-        except Exception as e:
-            logger.warning(f"Gemini refine failed: {e}")
+                uid=uid, temperature=0.5, max_tokens=2500)
+        except Exception:
             return task, search_results
         refined, ref = task, search_results
         m = re.search(r"===REFINED_PROMPT===\s*(.*?)\s*===REFERENCE===\s*(.*)", out, re.DOTALL)
@@ -1008,242 +1110,221 @@ class MacBot(commands.Bot):
             refined = out.strip() or task
         return refined, ref
 
-    async def gemini_review(self, refined_task: str, code: str) -> str:
-        sys_p = (
-            "You are a strict senior code reviewer. If the code is correct, complete, and "
-            "production-ready, reply with EXACTLY the word APPROVED on its own line, then a "
-            "one-line summary. Otherwise, output a numbered list of concrete, actionable "
-            "issues — each with the exact fix needed. No praise, no filler."
-        )
-        usr_p = f"Task:\n{refined_task}\n\nCode:\n```\n{code[:9000]}\n```"
+    async def gemini_review(self, refined_task: str, code: str, uid) -> str:
+        sys_p = ("Strict senior code reviewer. If correct+complete+production-ready, reply "
+                 "EXACTLY 'APPROVED' on its own line + one-line summary. Otherwise numbered issues.")
+        usr_p = f"Task:\n{refined_task}\n\nCode:\n```\n{code[:8000]}\n```"
         try:
             return await self.gemini_chat(
                 [{"role": "system", "content": sys_p}, {"role": "user", "content": usr_p}],
-                temperature=0.3, max_tokens=2000,
-            )
+                uid=uid, temperature=0.3, max_tokens=1500)
         except Exception as e:
             return f"(reviewer error: {e})"
 
-    async def run_pipeline(self, channel, user_id, task: str,
-                           filename: Optional[str] = None, max_iterations: int = 3):
+    async def run_pipeline(self, channel, uid, task: str, filename=None, max_iterations=3):
         filename = filename or infer_filename(task)
-        emb = discord.Embed(
-            title="🏗️ Pipeline Started",
-            description=f"**Task:** {task[:900]}\n**Output file:** `{filename}`",
-            color=C_WARM,
-        )
+        emb = discord.Embed(title="🏗️ Pipeline Started",
+                            description=f"**Task:** {task[:800]}\n**File:** `{filename}`",
+                            color=C_WARM)
         emb.add_field(name="Stages", value=(
             "1️⃣ **GEMINI** — refine + research\n"
-            "2️⃣ **DEEPSEEK** — generate\n"
-            "3️⃣ **GEMINI** — code review\n"
-            "4️⃣ **DEEPSEEK** — fix issues (loop)"
+            "2️⃣ **OPENROUTER** — generate\n"
+            "3️⃣ **GEMINI** — review\n"
+            "4️⃣ **OPENROUTER** — fix loop"
         ), inline=False)
         status = await safe_send(channel, embed=emb)
         if status is None:
             return
 
-        async def step_update(title, body, color=C_PRIMARY):
+        async def step(title, body, color=C_PRIMARY):
             e = discord.Embed(title=title, description=body[:4000], color=color)
             e.set_footer(text=f"Pipeline · {filename}")
             await safe_edit(status, embed=e)
 
         try:
-            await step_update("1️⃣ GEMINI — Refining + researching",
-                              f"Raw task: {task[:400]}", C_WARM)
-            refined, docs = await self.gemini_refine_and_research(task)
-            await step_update("1️⃣ GEMINI — Ready",
-                              f"**Refined prompt:**\n{refined[:1500]}\n\n"
-                              f"**Reference docs:**\n{docs[:1800]}", C_OK)
+            await step("1️⃣ GEMINI — refining + researching", f"Task: {task[:350]}", C_WARM)
+            refined, docs = await self.gemini_refine_and_research(task, uid)
+            await step("1️⃣ GEMINI — ready",
+                       f"**Prompt:**\n{refined[:1200]}\n\n**Docs:**\n{docs[:1500]}", C_OK)
 
-            await step_update("2️⃣ DEEPSEEK — Generating...", "⏳ working...", C_DEEP)
+            await step("2️⃣ OPENROUTER — generating...", "⏳", C_DEEP)
 
             def build_msgs(existing="", issues=""):
-                sys_p = ("You are an elite software engineer. Produce a complete, working, "
-                         "production-ready solution. Output ONLY the full file content in a "
-                         "single fenced code block with the correct language identifier.")
+                sp = ("You are an elite software engineer. Produce a complete working "
+                      "production-ready solution. Output ONLY the full file content in a "
+                      "single fenced code block with the language identifier.")
                 parts = [f"TASK:\n{refined}"]
                 if docs:
-                    parts.append(f"REFERENCE DOCS:\n{docs[:6000]}")
+                    parts.append(f"DOCS:\n{docs[:5000]}")
                 if existing:
-                    parts.append(f"EXISTING CODE:\n```\n{existing[:8000]}\n```")
+                    parts.append(f"EXISTING:\n```\n{existing[:7000]}\n```")
                 if issues:
-                    parts.append(f"REVIEWER FEEDBACK — you MUST fix these:\n{issues}")
-                parts.append(f"Deliverable: complete `{filename}`. "
-                             "Output ONLY the file inside a single fenced code block.")
-                return [{"role": "system", "content": sys_p},
+                    parts.append(f"FIX THESE:\n{issues}")
+                parts.append(f"Deliverable: `{filename}`. ONLY the code block.")
+                return [{"role": "system", "content": sp},
                         {"role": "user", "content": "\n\n".join(parts)}]
 
             try:
                 raw_code = await self.openrouter_call(
-                    build_msgs(), model=PIPELINE_GENERATOR_MODEL,
-                    temperature=0.5, max_tokens=6000,
-                )
+                    build_msgs(), uid=uid, temperature=0.5, max_tokens=6000)
             except Exception as e:
-                await step_update("❌ DEEPSEEK failed", f"`{str(e)[:300]}`", C_ERR)
+                await step("❌ OPENROUTER failed", f"`{str(e)[:280]}`", C_ERR)
                 return
 
             code = strip_code_fences(raw_code) or raw_code.strip()
-            await step_update("2️⃣ DEEPSEEK — Draft ready",
-                              f"```\n{code[:3400]}\n```", C_OK)
+            await step("2️⃣ OPENROUTER — draft ready", f"```\n{code[:3000]}\n```", C_OK)
 
             final_code = code
             approved = False
             iteration = 0
             for iteration in range(1, max_iterations + 1):
-                await step_update(f"3️⃣ GEMINI review — iter {iteration}/{max_iterations}",
-                                  f"Checking ({len(final_code)} chars)...", C_WARM)
-                review = await self.gemini_review(refined, final_code)
+                await step(f"3️⃣ GEMINI review — {iteration}/{max_iterations}",
+                           f"Checking ({len(final_code)} chars)...", C_WARM)
+                review = await self.gemini_review(refined, final_code, uid)
                 if review.strip().upper().startswith("APPROVED"):
-                    await step_update(f"3️⃣ GEMINI review — iter {iteration}",
-                                      f"✅ **APPROVED**\n\n{review[:3000]}", C_OK)
+                    await step(f"3️⃣ GEMINI — {iteration}", f"✅ APPROVED\n\n{review[:2500]}", C_OK)
                     approved = True
                     break
-                await step_update(f"3️⃣ GEMINI review — iter {iteration}",
-                                  f"⚠️ **Issues**\n\n{review[:3200]}", C_ACCENT)
-                await step_update(f"4️⃣ DEEPSEEK — Fixing (iter {iteration})",
-                                  "⏳ applying feedback...", C_DEEP)
+                await step(f"3️⃣ GEMINI — {iteration}", f"⚠️ Issues\n\n{review[:2800]}", C_ACCENT)
+                await step(f"4️⃣ OPENROUTER — fixing ({iteration})", "⏳", C_DEEP)
                 try:
                     raw_fixed = await self.openrouter_call(
                         build_msgs(existing=final_code, issues=review),
-                        model=PIPELINE_GENERATOR_MODEL, temperature=0.4, max_tokens=6000,
-                    )
+                        uid=uid, temperature=0.4, max_tokens=6000)
                 except Exception as e:
-                    await step_update(f"❌ DEEPSEEK fix failed (iter {iteration})",
-                                      f"`{str(e)[:300]}`", C_ERR)
+                    await step(f"❌ OpenRouter fix failed ({iteration})",
+                               f"`{str(e)[:280]}`", C_ERR)
                     break
                 fixed = strip_code_fences(raw_fixed) or raw_fixed.strip()
                 if not fixed.strip():
                     break
                 final_code = fixed
-                await step_update(f"4️⃣ DEEPSEEK — Fix applied (iter {iteration})",
-                                  f"```\n{final_code[:3200]}\n```", C_PRIMARY)
+                await step(f"4️⃣ OPENROUTER — fix applied ({iteration})",
+                           f"```\n{final_code[:2800]}\n```", C_PRIMARY)
 
             summary = discord.Embed(
                 title=f"✅ Pipeline complete — `{filename}`",
-                description=(
-                    f"**Review:** {'APPROVED' if approved else 'max iterations reached'}\n"
-                    f"**Final size:** {len(final_code)} chars\n"
-                    f"**Iterations:** {iteration}"
-                ),
-                color=C_OK if approved else C_WARM,
-            )
+                description=(f"**Review:** {'APPROVED' if approved else 'max iter'}\n"
+                             f"**Size:** {len(final_code)} chars\n"
+                             f"**Iterations:** {iteration}"),
+                color=C_OK if approved else C_WARM)
             await safe_edit(status, embed=summary)
             buf = io.BytesIO(final_code.encode("utf-8"))
             try:
-                await safe_send(channel, content=f"📦 **Final `{filename}`**",
+                await safe_send(channel, content=f"📦 **`{filename}`**",
                                 file=discord.File(buf, filename=filename))
             except discord.HTTPException as e:
                 await send_long(channel, f"❌ Attach failed ({e}). Code:\n\n{final_code}")
         except Exception as e:
-            logger.error(f"Pipeline error: {e}")
-            await step_update("❌ Pipeline crashed", f"`{str(e)[:400]}`", C_ERR)
+            logger.error(f"Pipeline: {e}")
+            await step("❌ Pipeline crashed", f"`{str(e)[:350]}`", C_ERR)
 
-    # ---------------- Debate ----------------
-    async def run_ai_chat(self, user_id: int):
-        s = self.ai_chat_sessions.get(user_id)
+    # ==================================================================
+    # DEBATE
+    # ==================================================================
+    async def run_ai_chat(self, uid: int):
+        s = self.ai_chat_sessions.get(uid)
         if not s:
             return
         ch = self.get_channel(s["channel_id"])
         if not ch:
-            self.ai_chat_sessions.pop(user_id, None)
+            self.ai_chat_sessions.pop(uid, None)
             return
         desc = s["description"]
         hist = s["history"]
         turn = 0
         max_turns = self.ai_chat_max_turns
-        A1, A2 = "🤠", "🤖"
 
         def strip_think(t):
             return re.sub(r'<think>.*?</think>', '', t, flags=re.DOTALL).strip()
 
         try:
-            await send_long(ch, f"🏟️ **AI DEBATE – {desc}**\n{A1} **AI1** vs {A2} **AI2**")
+            await send_long(ch, f"🏟️ **AI DEBATE – {desc}**")
             while turn < max_turns:
-                if user_id not in self.ai_chat_sessions:
+                if uid not in self.ai_chat_sessions:
                     break
                 n = 1 if turn % 2 == 0 else 2
                 o = 2 if n == 1 else 1
-                em = A1 if n == 1 else A2
+                em = "🤠" if n == 1 else "🤖"
                 if not hist:
-                    up = (f"🏁 Topic: {desc}\nYou are AI{n}. Bold funny opening. "
-                          "Eventually agree on one final answer.")
+                    up = f"Topic: {desc}\nYou are AI{n}. Bold opening, aim for one final answer."
                 else:
-                    recent = hist[-10:]
+                    recent = hist[-8:]
                     ctx = "\n".join(f"AI{e['role']}: {e['content']}" for e in recent)
-                    up = f"📢 So far:\n{ctx}\n\nAI{n} responds with energy."
-                sp = (f"You are AI{n}, sassy debater. Topic: \"{desc}\" vs AI{o}. "
-                      "Dramatic, emojis, <500 chars. Aim for one final answer.")
+                    up = f"Prior:\n{ctx}\n\nAI{n} responds."
+                sp = f"You are AI{n} debating \"{desc}\" vs AI{o}. Dramatic, <400 chars, aim for consensus."
                 try:
-                    resp = strip_think(await self.gemini_chat(
+                    resp = strip_think(await self.groq_chat(
                         [{"role": "system", "content": sp}, {"role": "user", "content": up}],
-                        temperature=0.9, max_tokens=1024,
-                    )) or "[no response]"
+                        uid=uid, temperature=0.9, max_tokens=500)) or "[no response]"
                 except Exception as e:
-                    await send_long(ch, f"⚠️ AI{n} error: {str(e)[:200]}")
+                    await send_long(ch, f"⚠️ AI{n} error: {str(e)[:150]}")
                     break
                 hist.append({"role": n, "content": resp})
                 await send_long(ch, f"{em} **AI{n}:** {resp}")
                 turn += 1
                 if turn < max_turns:
-                    await asyncio.sleep(13)
-            if user_id in self.ai_chat_sessions:
-                recent = hist[-10:]
+                    await asyncio.sleep(8)
+            if uid in self.ai_chat_sessions:
+                recent = hist[-8:]
                 ctx = "\n".join(f"AI{e['role']}: {e['content']}" for e in recent)
-                fp = f"🏆 Debate ended.\n{ctx}\n\nAs AI1, deliver final joint verdict."
-                spf = f"You are AI1. Give the final answer you and AI2 settled on for \"{desc}\"."
                 try:
-                    fr = strip_think(await self.gemini_chat(
-                        [{"role": "system", "content": spf}, {"role": "user", "content": fp}],
-                        temperature=0.9, max_tokens=1024,
-                    )) or "[none]"
+                    fr = strip_think(await self.groq_chat(
+                        [{"role": "system", "content": "You are AI1. Give the final joint verdict."},
+                         {"role": "user", "content": ctx}],
+                        uid=uid, temperature=0.9, max_tokens=500)) or "[none]"
                 except Exception as e:
-                    fr = f"Error: {str(e)[:200]}"
+                    fr = f"Error: {str(e)[:150]}"
                 await send_long(ch, f"🏁 **FINAL VERDICT:**\n{fr}")
-                self.ai_chat_sessions.pop(user_id, None)
+                self.ai_chat_sessions.pop(uid, None)
         except asyncio.CancelledError:
-            self.ai_chat_sessions.pop(user_id, None)
+            self.ai_chat_sessions.pop(uid, None)
             raise
         except Exception as e:
-            logger.error(f"Debate error: {e}")
-            self.ai_chat_sessions.pop(user_id, None)
+            logger.error(f"Debate: {e}")
+            self.ai_chat_sessions.pop(uid, None)
 
-    # ---------------- central message handler ----------------
+    # ==================================================================
+    # MESSAGE HANDLER
+    # ==================================================================
     async def process_user_message(self, user, clean_content, destination,
                                    thinking_msg=None, reply_context=None,
                                    trigger_msg=None, images=None):
         images = images or []
-        slot_name = self.active_slot.get(user.id, "sv1")
-        if user.id not in self.user_slots:
-            self.get_slot(user.id, "sv1")
+        uid = user.id
+        slot_name = self.active_slot.get(uid, "sv1")
+        if uid not in self.user_slots:
+            self.get_slot(uid, "sv1")
 
-        # Natural-language search: "search X", "google X", "look up X", "find X"
-        search_match = re.match(
-            r'^(?:search|google|look\s*up|find|lookup)\s*:?\s*(.+)$',
-            clean_content, re.IGNORECASE)
+        macro_match = re.match(r'^\.(\w+)\s*(.*)$', clean_content)
+        if macro_match:
+            mname = macro_match.group(1).lower()
+            extra = macro_match.group(2)
+            macros = self.get_macros(uid)
+            if mname in macros:
+                clean_content = macros[mname] + (f"\n{extra}" if extra else "")
+
+        search_match = re.match(r'^(?:search|google|look\s*up|find|lookup)\s*:?\s*(.+)$',
+                                clean_content, re.IGNORECASE)
         if search_match:
             query = search_match.group(1).strip()
             if query:
-                logger.info(f"Search intercept: {query!r}")
                 try:
-                    thinking_msg = await destination.send(f"🌐 Searching: **{query}**...")
-                except discord.HTTPException as e:
-                    logger.warning(f"Could not send search status: {e}")
+                    thinking_msg = await destination.send(f"🌐 **{query}**...")
+                except discord.HTTPException:
                     return
                 results = await perform_web_search(query)
-                if results.startswith("No results") or results.startswith("Search"):
+                if results.startswith("No results"):
                     return await safe_edit(thinking_msg, content=f"❌ {results}")
-                augmented = (
-                    f"Web search results for: {query}\n\n{results}\n\n---\n\n"
-                    f"Summarize clearly for the user. Cite sources inline like [1], [2]. "
-                    f"Keep it useful and concise."
-                )
-                response = await self.chat_call(augmented, user.id, None, slot_name)
+                augmented = (f"Web results for: {query}\n\n{results}\n\n---\n\n"
+                             f"Summarize. Cite sources inline like [1], [2].")
+                response = await self.chat_call(augmented, uid=uid, max_tokens=800)
                 response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
-                self.append_to_slot(user.id, slot_name, "user", clean_content)
-                self.append_to_slot(user.id, slot_name, "assistant", response)
-                if self.get_persistent_enabled(user.id):
-                    self.add_persistent_memory(user.id, "user", clean_content)
-                    self.add_persistent_memory(user.id, "assistant", response)
+                self.append_to_slot(uid, slot_name, "user", clean_content)
+                self.append_to_slot(uid, slot_name, "assistant", response)
+                if self.get_persistent_enabled(uid):
+                    self.add_persistent_memory(uid, "user", clean_content)
+                    self.add_persistent_memory(uid, "assistant", response)
                 if len(response) <= DISCORD_LIMIT:
                     await safe_edit(thinking_msg, content=response)
                 else:
@@ -1254,88 +1335,86 @@ class MacBot(commands.Bot):
                     await send_long(destination, response)
                 return
 
-        if self.get_persistent_enabled(user.id):
-            self.add_persistent_memory(user.id, "user", clean_content)
-        self.append_to_slot(user.id, slot_name, "user", clean_content)
+        if self.get_persistent_enabled(uid):
+            self.add_persistent_memory(uid, "user", clean_content)
+        self.append_to_slot(uid, slot_name, "user", clean_content)
 
+        is_short = len(clean_content) < 80 and not images and not reply_context
         thinking_msg = None
-        try:
-            thinking_msg = await destination.send("🔥 Thinking...")
-        except discord.Forbidden as e:
-            logger.error(f"Cannot send in {destination}: {e}")
-            if trigger_msg:
-                try:
-                    await trigger_msg.reply("❌ I don't have permission to send messages here. "
-                                            "Please give me **Send Messages** and **Embed Links**.")
-                except Exception:
-                    pass
-            return
-        except discord.HTTPException as e:
-            logger.error(f"Thinking send failed: {e}")
-            return
+        if not is_short:
+            try:
+                thinking_msg = await destination.send("🔥")
+            except discord.Forbidden:
+                if trigger_msg:
+                    try:
+                        await trigger_msg.reply("❌ No permission to send here.")
+                    except Exception:
+                        pass
+                return
+            except discord.HTTPException:
+                return
 
         system_prompt = None
-        court = self.court_sessions.get(user.id)
+        court = self.court_sessions.get(uid)
         if court and court.get("case"):
             tpl = self.court_roles.get(court["role"], "")
             if tpl:
                 p = court.get("participants", {})
-                pl = [f"- {r.capitalize()}: <@{uid}>" for r, uid in p.items()]
+                pl = [f"- {r.capitalize()}: <@{u}>" for r, u in p.items()]
                 system_prompt = tpl.format(case=court["case"],
-                                           participants="\n".join(pl) if pl else "None other than you.")
+                                           participants="\n".join(pl) if pl else "None.")
         elif reply_context:
             oa = reply_context.get("author", "someone")
             oc = reply_context.get("content", "")
             base = self.mode_prompts.get(self.current_mode, self.mode_prompts[DEFAULT_MODE])
-            system_prompt = (
-                f"{base}\n\n=== REPLY-REACTION TASK ===\n"
-                f"{user.display_name} is replying to **{oa}**.\n"
-                f"Original from {oa}: \"{oc}\"\n"
-                f"User's reply: \"{clean_content}\"\n\n"
-                f"React like a real friend. Reference @{oa} naturally. "
-                f"Short and punchy (1–3 sentences)."
-            )
+            system_prompt = (f"{base}\n\nReplying to **{oa}**: \"{oc}\"\n"
+                             f"User says: \"{clean_content}\"\nReact naturally. 1–3 sentences.")
 
         if images:
-            note = f"[{len(images)} image(s) attached by the user — actually look at them.]"
-            if system_prompt:
-                system_prompt = f"{system_prompt}\n\n{note}"
-            else:
-                system_prompt = note
+            note = f"[{len(images)} image(s) — actually look at them.]"
+            system_prompt = (system_prompt + "\n" + note) if system_prompt else note
 
         try:
-            response = await self.chat_call(clean_content, user_id=user.id,
+            response = await self.chat_call(clean_content, uid=uid,
                                             system_prompt=system_prompt,
                                             slot_name=slot_name, images=images)
             response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
-            if self.get_persistent_enabled(user.id):
-                self.add_persistent_memory(user.id, "assistant", response)
-            self.append_to_slot(user.id, slot_name, "assistant", response)
-            if len(response) <= DISCORD_LIMIT:
-                await safe_edit(thinking_msg, content=response)
+            if self.get_persistent_enabled(uid):
+                self.add_persistent_memory(uid, "assistant", response)
+            self.append_to_slot(uid, slot_name, "assistant", response)
+
+            if thinking_msg:
+                if len(response) <= DISCORD_LIMIT:
+                    await safe_edit(thinking_msg, content=response)
+                else:
+                    try:
+                        await thinking_msg.delete()
+                    except discord.HTTPException:
+                        pass
+                    await send_long(destination, response)
             else:
-                try:
-                    await thinking_msg.delete()
-                except discord.HTTPException:
-                    pass
                 await send_long(destination, response)
 
             if self.current_mode == "brainrot":
                 try:
-                    gif = random.choice(BRAINROT_GIFS)
-                    await destination.send(gif)
-                    logger.info(f"Brainrot GIF sent: {gif}")
-                except Exception as e:
-                    logger.warning(f"Brainrot GIF failed: {e}")
+                    pool = self.get_gif_pool(uid)
+                    await destination.send(random.choice(pool))
+                except Exception:
+                    pass
         except Exception as e:
-            logger.error(f"process_user_message error: {e}", exc_info=True)
-            await safe_edit(thinking_msg, content=f"❌ Error: {str(e)[:180]}")
+            logger.error(f"process_user_message: {e}", exc_info=True)
+            if thinking_msg:
+                await safe_edit(thinking_msg, content=f"❌ {str(e)[:150]}")
+            else:
+                await send_long(destination, f"❌ {str(e)[:150]}")
 
-    # ---------------- video / music ----------------
-    async def generate_video(self, prompt, user_id, status_message):
+    # ==================================================================
+    # VIDEO / MUSIC
+    # ==================================================================
+    async def generate_video(self, prompt, uid, status_message):
         if not SILICONFLOW_API_KEYS:
             return await safe_edit(status_message, content="❌ No SiliconFlow key")
-        self.video_jobs[user_id] = status_message
+        self.video_jobs[uid] = status_message
         try:
             submit_url = "https://api.siliconflow.com/v1/video/submit"
             status_url = "https://api.siliconflow.com/v1/video/status"
@@ -1359,12 +1438,11 @@ class MacBot(commands.Bot):
                                 self.siliconflow_key_index = (self.siliconflow_key_index + 1) % len(SILICONFLOW_API_KEYS)
                                 headers["Authorization"] = f"Bearer {api_key}"
                                 await asyncio.sleep(2)
-                                continue
                     except Exception:
                         pass
                 if not rid:
                     raise Exception("No requestId")
-                await safe_edit(status_message, content=f"🎬 Video queued (`{rid}`)")
+                await safe_edit(status_message, content=f"🎬 queued `{rid}`")
                 for attempt in range(120):
                     await asyncio.sleep(10)
                     async with s.post(status_url, headers={"Authorization": f"Bearer {api_key}"},
@@ -1381,7 +1459,7 @@ class MacBot(commands.Bot):
                                 if u:
                                     async with s.get(u, timeout=aiohttp.ClientTimeout(total=120)) as vr:
                                         data = await vr.read()
-                                    await safe_edit(status_message, content=f"✅ **Video Ready!**")
+                                    await safe_edit(status_message, content="✅ **Video Ready!**")
                                     await safe_send(status_message.channel,
                                                     file=discord.File(io.BytesIO(data), filename="video.mp4"))
                                     return
@@ -1389,44 +1467,44 @@ class MacBot(commands.Bot):
                         elif st == "Failed":
                             raise Exception(pd.get("reason", "Unknown"))
                         else:
-                            await safe_edit(status_message, content=f"🎬 ({attempt+1}/120) — **{st}**")
+                            await safe_edit(status_message, content=f"🎬 {attempt+1}/120 — **{st}**")
                 raise Exception("Timeout")
         except Exception as e:
-            await safe_edit(status_message, content=f"❌ **Video Failed** — {str(e)[:100]}")
+            await safe_edit(status_message, content=f"❌ {str(e)[:100]}")
         finally:
-            self.video_jobs.pop(user_id, None)
+            self.video_jobs.pop(uid, None)
 
-    async def generate_music(self, prompt, user_id, status_message):
+    async def generate_music(self, prompt, uid, status_message):
         url = f"{POLLINATIONS_AUDIO_URL}/{urllib.parse.quote(prompt)}"
         headers = {"User-Agent": "Mozilla/5.0"}
-        if POLLINATIONS_API_KEY:
-            headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"
-        self.music_jobs[user_id] = status_message
+        if GLOBAL_POLLINATIONS_KEY:
+            headers["Authorization"] = f"Bearer {GLOBAL_POLLINATIONS_KEY}"
+        self.music_jobs[uid] = status_message
         try:
             async with aiohttp.ClientSession() as s:
                 async with s.get(url, headers=headers,
-                                 timeout=aiohttp.ClientTimeout(total=300)) as r:
+                                 timeout=aiohttp.ClientTimeout(total=240)) as r:
                     if r.status == 200:
                         ct = r.headers.get('Content-Type', '')
                         if any(x in ct for x in ('audio', 'mpeg', 'ogg', 'octet-stream')):
                             data = await r.read()
                             if len(data) < 1000:
-                                raise Exception("Invalid audio")
-                            await safe_edit(status_message, content=f"🎵 Ready")
+                                raise Exception("Invalid")
+                            await safe_edit(status_message, content="🎵 Ready")
                             await safe_send(status_message.channel,
                                             file=discord.File(io.BytesIO(data), filename="music.mp3"))
                         else:
-                            raise Exception(f"Unexpected content-type: {ct}")
+                            raise Exception(f"Bad content-type: {ct}")
                     else:
                         raise Exception(f"Error {r.status}")
-        except asyncio.TimeoutError:
-            await safe_edit(status_message, content="❌ Timeout")
         except Exception as e:
-            await safe_edit(status_message, content=f"❌ Failed: {str(e)[:100]}")
+            await safe_edit(status_message, content=f"❌ {str(e)[:100]}")
         finally:
-            self.music_jobs.pop(user_id, None)
+            self.music_jobs.pop(uid, None)
 
-    # ---------------- loops ----------------
+    # ==================================================================
+    # LOOPS / HOOK
+    # ==================================================================
     async def update_presence_loop(self):
         await self.wait_until_ready()
         while not self.is_closed():
@@ -1437,7 +1515,17 @@ class MacBot(commands.Bot):
                     activity=discord.Activity(type=discord.ActivityType.playing, name=txt))
             except Exception:
                 pass
-            await asyncio.sleep(60)
+            await asyncio.sleep(90)
+
+    async def load_pen_archive_async(self):
+        url = "https://raw.githubusercontent.com/Pen-123/archive-/refs/heads/main/archives.txt"
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                    if r.status == 200:
+                        self.pen_archive = await r.text()
+        except Exception:
+            pass
 
     async def setup_hook(self):
         for c in self.tree.walk_commands():
@@ -1451,57 +1539,366 @@ class MacBot(commands.Bot):
             synced = await self.tree.sync()
             logger.info(f"✅ Synced {len(synced)} commands")
         except Exception as e:
-            logger.error(f"Sync failed: {e}")
+            logger.error(f"Sync: {e}")
         self.loop.create_task(self.update_presence_loop())
         self.loop.create_task(self.load_pen_archive_async())
 
 
 bot = MacBot()
 
-# ============================================================
-# AUTOCOMPLETE
-# ============================================================
-async def llm_ac(i, c):
-    return [app_commands.Choice(name=n, value=n) for n in bot.allowed_llms if c.lower() in n.lower()]
 
-async def gemini_ac(i, c):
-    return [app_commands.Choice(name=m, value=m) for m in GEMINI_MODELS if c.lower() in m.lower()]
+async def _provider_ac(i, c):
+    return [app_commands.Choice(name=p, value=p) for p in PROVIDERS if c.lower() in p.lower()]
 
-async def mode_ac(i, c):
-    return [app_commands.Choice(name=m, value=m) for m in bot.mode_prompts if c.lower() in m.lower()]
+
+async def _model_provider_ac(i, c):
+    return [app_commands.Choice(name=p, value=p) for p in MODEL_PROVIDERS if c.lower() in p.lower()]
+
+
+# ============================================================
+# /cs GROUP
+# ============================================================
+@bot.hybrid_group(name="cs", description="⚙️ Customization — profile, keys, models, voices, macros, GIFs",
+                  invoke_without_command=True)
+async def cs_group(ctx):
+    emb = discord.Embed(title="⚙️ /cs — Customization",
+                        description="Everything's per-user. Your keys, your models, your vibes.",
+                        color=C_PRIMARY)
+    emb.add_field(name="Profile", value="`/cs profile` — name, pronouns, vibe, instructions, catchphrase, language", inline=False)
+    emb.add_field(name="API Keys", value="`/cs key add|remove|list <provider> [key]`\nProviders: groq, openrouter, hf, gemini, gemini_image, fish, imgbb\nUp to 3 keys per provider", inline=False)
+    emb.add_field(name="Models", value="`/cs model add|remove|list <provider> [model]`\nProviders: groq, openrouter, hf_image, hf_text, gemini, fish\nUp to 3 models per provider", inline=False)
+    emb.add_field(name="Voices", value="`/cs voice <name>` · `/cs voice-add <name> <fish_id> [emoji] [desc]` · `/cs voice-del <name>` · `/cs voices`", inline=False)
+    emb.add_field(name="Macros", value="`/cs macro add|remove|list <name> [prompt]` — trigger with `.name` in chat", inline=False)
+    emb.add_field(name="GIFs", value="`/cs gif list|add|remove|clear|reset [value]`", inline=False)
+    emb.add_field(name="Misc", value="`/cs show` · `/cs reset [section]`", inline=False)
+    await ctx.send(embed=emb)
+
+
+@cs_group.command(name="profile", description="Set your personal profile")
+@app_commands.describe(name="What Mac calls you", pronouns="Your pronouns",
+                       vibe="Vibe to match (e.g. 'dry sarcastic')",
+                       instructions="Extra instructions Mac must follow",
+                       catchphrase="End every reply with this", language="Preferred language",
+                       clear="Clear your profile")
+async def cs_profile(ctx, name: str = None, pronouns: str = None, vibe: str = None,
+                     instructions: str = None, catchphrase: str = None,
+                     language: str = None, clear: bool = False):
+    uid = ctx.author.id
+    if clear:
+        bot.clear_profile(uid)
+        return await ctx.send("🧹 Profile cleared.")
+    provided = any(v is not None for v in [name, pronouns, vibe, instructions, catchphrase, language])
+    if not provided:
+        p = bot.get_profile(uid)
+        if not p:
+            return await ctx.send("No profile set. Example:\n"
+                                  "`/cs profile name:Alex vibe:sarcastic gremlin "
+                                  "catchphrase:🔥 instructions:be brutally honest`")
+        emb = discord.Embed(title=f"Your Profile — {ctx.author.display_name}", color=C_PRIMARY)
+        for k, v in p.items():
+            emb.add_field(name=k.title(), value=str(v)[:1024], inline=False)
+        return await ctx.send(embed=emb, ephemeral=True)
+    bot.set_profile(uid, name=name, pronouns=pronouns, vibe=vibe,
+                    instructions=instructions, catchphrase=catchphrase, language=language)
+    p = bot.get_profile(uid)
+    emb = discord.Embed(title="✅ Profile Updated", color=C_OK)
+    for k, v in p.items():
+        emb.add_field(name=k.title(), value=str(v)[:1024], inline=False)
+    await ctx.send(embed=emb, ephemeral=True)
+
+
+@cs_group.command(name="key", description="Manage your API keys (up to 3 per provider)")
+@app_commands.autocomplete(provider=_provider_ac)
+@app_commands.describe(provider="groq|openrouter|hf|gemini|gemini_image|fish|imgbb",
+                       action="add | remove | list", value="API key (for add) or index (for remove)")
+async def cs_key(ctx, provider: str, action: str = "list", value: str = None):
+    uid = ctx.author.id
+    p = provider.lower()
+    if p not in PROVIDERS:
+        return await ctx.send(f"❌ Providers: {', '.join(PROVIDERS)}", ephemeral=True)
+    u = bot._cs(uid)
+    field = f"{p}_keys"
+    keys = u.setdefault(field, [])
+    a = action.lower()
+    if a == "list":
+        if not keys:
+            return await ctx.send(f"No custom `{p}` keys — using bot defaults.", ephemeral=True)
+        masked = [f"`{i}` ...{k[-6:]}" for i, k in enumerate(keys)]
+        return await ctx.send(f"**Your `{p}` keys ({len(keys)}/3):**\n" + "\n".join(masked), ephemeral=True)
+    if a == "add":
+        if not value:
+            return await ctx.send("❌ Provide a key.", ephemeral=True)
+        if len(keys) >= MAX_KEYS_PER_PROVIDER:
+            return await ctx.send(f"❌ Max {MAX_KEYS_PER_PROVIDER} keys. Remove one first.", ephemeral=True)
+        keys.append(value.strip())
+        bot._save_cs()
+        return await ctx.send(f"✅ Added `{p}` key. You now have {len(keys)}.", ephemeral=True)
+    if a == "remove":
+        if value is None:
+            return await ctx.send("❌ Provide index.", ephemeral=True)
+        try:
+            idx = int(value)
+            keys.pop(idx)
+            bot._save_cs()
+            return await ctx.send(f"🗑️ Removed.", ephemeral=True)
+        except (ValueError, IndexError):
+            return await ctx.send("❌ Invalid index.", ephemeral=True)
+    await ctx.send("❌ Actions: add | remove | list", ephemeral=True)
+
+
+@cs_group.command(name="model", description="Manage your preferred models (up to 3 per provider)")
+@app_commands.autocomplete(provider=_model_provider_ac)
+@app_commands.describe(provider="groq|openrouter|hf_image|hf_text|gemini|fish",
+                       action="add | remove | list", value="Model id (for add) or index (for remove)")
+async def cs_model(ctx, provider: str, action: str = "list", value: str = None):
+    uid = ctx.author.id
+    p = provider.lower()
+    if p not in MODEL_PROVIDERS:
+        return await ctx.send(f"❌ Providers: {', '.join(MODEL_PROVIDERS)}", ephemeral=True)
+    u = bot._cs(uid)
+    field = f"{p}_models"
+    models = u.setdefault(field, [])
+    a = action.lower()
+    if a == "list":
+        if not models:
+            defaults = bot.user_models(None, p)
+            return await ctx.send(f"No custom `{p}` models. Bot defaults:\n"
+                                  + "\n".join(f"• `{m}`" for m in defaults), ephemeral=True)
+        return await ctx.send(f"**Your `{p}` models ({len(models)}/3):**\n"
+                              + "\n".join(f"`{i}` {m}" for i, m in enumerate(models)), ephemeral=True)
+    if a == "add":
+        if not value:
+            return await ctx.send("❌ Provide a model id.", ephemeral=True)
+        if len(models) >= MAX_MODELS_PER_PROVIDER:
+            return await ctx.send(f"❌ Max {MAX_MODELS_PER_PROVIDER} models.", ephemeral=True)
+        models.append(value.strip())
+        bot._save_cs()
+        return await ctx.send(f"✅ Added `{p}` model. You now have {len(models)}.", ephemeral=True)
+    if a == "remove":
+        if value is None:
+            return await ctx.send("❌ Provide index.", ephemeral=True)
+        try:
+            idx = int(value)
+            models.pop(idx)
+            bot._save_cs()
+            return await ctx.send(f"🗑️ Removed.", ephemeral=True)
+        except (ValueError, IndexError):
+            return await ctx.send("❌ Invalid index.", ephemeral=True)
+    await ctx.send("❌ Actions: add | remove | list", ephemeral=True)
+
+
+@cs_group.command(name="voice", description="Set your default TTS voice")
+@app_commands.describe(name="Voice name (blank to see current)")
+async def cs_voice(ctx, name: str = None):
+    uid = ctx.author.id
+    voices = bot.all_voices(uid)
+    if name is None:
+        cur = bot.default_voice(uid)
+        listing = "\n".join(f"• `{k}` — {v['emoji']} {v['desc']}" for k, v in voices.items())
+        return await ctx.send(f"Your default voice: **{cur}**\n\nAvailable:\n{listing}", ephemeral=True)
+    if name not in voices:
+        return await ctx.send(f"❌ Unknown. Available: {', '.join(voices.keys())}", ephemeral=True)
+    u = bot._cs(uid)
+    u["default_voice"] = name
+    bot._save_cs()
+    meta = voices[name]
+    await ctx.send(f"✅ Default voice → {meta['emoji']} **{meta['desc']}**")
+
+
+@cs_group.command(name="voice-add", description="Add a custom Fish Audio voice")
+@app_commands.describe(name="Short name (no spaces)", fish_id="Fish Audio reference ID",
+                       emoji="Emoji", desc="Description")
+async def cs_voice_add(ctx, name: str, fish_id: str, emoji: str = "🎤", desc: str = None):
+    uid = ctx.author.id
+    n = name.lower().strip().replace(" ", "-")
+    if n in BUILTIN_VOICES:
+        return await ctx.send("❌ Collides with built-in.", ephemeral=True)
+    u = bot._cs(uid)
+    u.setdefault("voices", {})[n] = {"id": fish_id, "emoji": emoji, "desc": desc or n}
+    bot._save_cs()
+    await ctx.send(f"✅ Added `{n}` — {emoji} {desc or n}.")
+
+
+@cs_group.command(name="voice-del", description="Remove a custom voice")
+async def cs_voice_del(ctx, name: str):
+    uid = ctx.author.id
+    u = bot._cs(uid)
+    voices = u.get("voices", {})
+    if name.lower() not in voices:
+        return await ctx.send("❌ Not a custom voice.", ephemeral=True)
+    voices.pop(name.lower())
+    bot._save_cs()
+    await ctx.send(f"🗑️ Removed `{name}`.")
+
+
+@cs_group.command(name="voices", description="List all voices available to you")
+async def cs_voices(ctx):
+    uid = ctx.author.id
+    voices = bot.all_voices(uid)
+    lines = "\n".join(f"• `{k}` — {v['emoji']} {v['desc']}" for k, v in voices.items())
+    await send_long(ctx, f"🎙️ **Voices**\n{lines}")
+
+
+@cs_group.command(name="macro", description="Save/run your own prompt shortcuts")
+@app_commands.describe(action="add | remove | list", name="Macro name", prompt="Prompt text")
+async def cs_macro(ctx, action: str = "list", name: str = None, prompt: str = None):
+    uid = ctx.author.id
+    a = action.lower()
+    u = bot._cs(uid)
+    macros = u.setdefault("macros", {})
+    if a == "add":
+        if not name or not prompt:
+            return await ctx.send("❌ `/cs macro add <name> <prompt>`")
+        macros[name.lower()] = prompt
+        bot._save_cs()
+        await ctx.send(f"💾 Macro `.{name.lower()}` saved.")
+    elif a == "remove":
+        if not name or name.lower() not in macros:
+            return await ctx.send("❌ Not found.")
+        macros.pop(name.lower())
+        bot._save_cs()
+        await ctx.send(f"🗑️ Removed.")
+    elif a == "list":
+        if not macros:
+            return await ctx.send("No macros. Example: `/cs macro add explain explain X in 3 sentences`")
+        lines = "\n".join(f"• `.{n}` — {p[:80]}" for n, p in macros.items())
+        await send_long(ctx, f"💾 **Macros**\n{lines}")
+    else:
+        await ctx.send("❌ add | remove | list")
+
+
+@cs_group.command(name="gif", description="Manage your brainrot GIF pool")
+@app_commands.describe(action="list | add | remove | clear | reset", value="URL (add) or index (remove)")
+async def cs_gif(ctx, action: str = "list", value: str = None):
+    uid = ctx.author.id
+    a = action.lower()
+    u = bot._cs(uid)
+    pool = u.setdefault("brainrot_gifs", [])
+    if a == "list":
+        current = bot.get_gif_pool(uid)
+        lines = "\n".join(f"`{i}` {url}" for i, url in enumerate(current))
+        source = "custom" if pool else "default"
+        await send_long(ctx, f"🧠 **Brainrot pool ({source}, {len(current)})**\n{lines[:3500]}")
+    elif a == "add":
+        if not value:
+            return await ctx.send("❌ `/cs gif add <url>`")
+        pool.append(value.strip())
+        bot._save_cs()
+        await ctx.send(f"✅ Added. Pool has {len(pool)}.")
+    elif a == "remove":
+        if value is None:
+            return await ctx.send("❌ `/cs gif remove <index>`")
+        try:
+            idx = int(value)
+            pool.pop(idx)
+            bot._save_cs()
+            await ctx.send(f"🗑️ Removed index {idx}.")
+        except (ValueError, IndexError):
+            await ctx.send("❌ Invalid index.")
+    elif a == "clear":
+        u["brainrot_gifs"] = []
+        bot._save_cs()
+        await ctx.send("🧹 Cleared. Default pool used.")
+    elif a == "reset":
+        u.pop("brainrot_gifs", None)
+        bot._save_cs()
+        await ctx.send("↺ Reset to defaults.")
+    else:
+        await ctx.send("❌ list | add | remove | clear | reset")
+
+
+@cs_group.command(name="show", description="Show ALL your customizations")
+async def cs_show(ctx):
+    uid = ctx.author.id
+    u = bot.cs.get(uid, {})
+    emb = discord.Embed(title=f"⚙️ {ctx.author.display_name}'s Customizations", color=C_PRIMARY)
+    prof = u.get("profile", {})
+    if prof:
+        emb.add_field(name="Profile",
+                      value="\n".join(f"• {k}: {v}" for k, v in prof.items())[:1024],
+                      inline=False)
+    for p in PROVIDERS:
+        keys = u.get(f"{p}_keys", [])
+        if keys:
+            emb.add_field(name=f"{p} keys", value=f"{len(keys)} set", inline=True)
+    for p in MODEL_PROVIDERS:
+        models = u.get(f"{p}_models", [])
+        if models:
+            emb.add_field(name=f"{p} models", value=f"{len(models)}: {models[0][:40]}...", inline=True)
+    voices = u.get("voices", {})
+    if voices:
+        emb.add_field(name="Custom voices", value=", ".join(voices.keys())[:1024], inline=False)
+    macros = u.get("macros", {})
+    if macros:
+        emb.add_field(name="Macros", value=", ".join(f".{n}" for n in macros.keys())[:1024], inline=False)
+    gifs = u.get("brainrot_gifs", [])
+    if gifs:
+        emb.add_field(name="Brainrot pool", value=f"{len(gifs)} custom GIFs", inline=True)
+    if not emb.fields:
+        emb.description = "Nothing set. Start with `/cs profile` or `/cs key add groq <key>`."
+    await ctx.send(embed=emb, ephemeral=True)
+
+
+@cs_group.command(name="reset", description="Reset a section of your customizations")
+@app_commands.describe(section="profile | keys | models | voices | macros | gifs | all")
+async def cs_reset(ctx, section: str = "all"):
+    uid = ctx.author.id
+    s = section.lower()
+    u = bot.cs.get(uid, {})
+    if s == "all":
+        bot.cs.pop(uid, None)
+        bot._save_cs()
+        return await ctx.send("💥 All customizations reset.")
+    if s == "profile":
+        u.pop("profile", None); u.pop("default_voice", None)
+    elif s == "keys":
+        for p in PROVIDERS:
+            u.pop(f"{p}_keys", None)
+    elif s == "models":
+        for p in MODEL_PROVIDERS:
+            u.pop(f"{p}_models", None)
+    elif s == "voices":
+        u.pop("voices", None)
+    elif s == "macros":
+        u.pop("macros", None)
+    elif s == "gifs":
+        u.pop("brainrot_gifs", None)
+    else:
+        return await ctx.send("❌ Options: profile, keys, models, voices, macros, gifs, all")
+    bot._save_cs()
+    await ctx.send(f"🧹 Reset `{s}`.")
 
 
 # ============================================================
 # HELP
 # ============================================================
-@bot.hybrid_command(name="mac", description="🔥 Show the Mac help menu")
+@bot.hybrid_command(name="mac", description="🔥 Mac help")
 async def mac_help(ctx):
-    emb = discord.Embed(title="🔥 Mac", color=C_PRIMARY,
-                        description="Mention me, reply to me, or use slash commands.")
+    emb = discord.Embed(title="🔥 Mac v21.2", color=C_PRIMARY,
+                        description="Mention me, reply to me, or slash. Per-user keys = per-user speed.")
     emb.add_field(name="💬 Chat", value="`@Mac <msg>` · `/query <msg>`", inline=False)
-    emb.add_field(name="👁️ Vision", value="Attach an image (or reply to one) when pinging me — I'll see it.", inline=False)
-    emb.add_field(name="🌐 Search", value="Just type `search <thing>` or `google <thing>`", inline=False)
-    emb.add_field(name="🗂️ Chat slots", value="`/sv1` `/sv2` `/sv3` `/sv4` `/sv5` — 5 separate chats per user", inline=False)
+    emb.add_field(name="👁️ Vision", value="Attach or reply to an image — I see it.", inline=False)
+    emb.add_field(name="🌐 Search", value="`search <thing>` (or google/look up/find)", inline=False)
+    emb.add_field(name="⚙️ /cs — Customization", value=(
+        "`/cs profile` — name, pronouns, vibe, instructions\n"
+        "`/cs key` — your own API keys, 3 max per provider\n"
+        "`/cs model` — your own models, 3 max per provider\n"
+        "`/cs voice` / `voice-add` / `voice-del` / `voices`\n"
+        "`/cs macro` — prompt shortcuts (`.name`)\n"
+        "`/cs gif` — brainrot pool\n"
+        "`/cs show` / `reset`"
+    ), inline=False)
+    emb.add_field(name="🗂️ Slots", value="`/sv1`–`/sv5` · `/svlist` · `/svclear`", inline=False)
     emb.add_field(name="🎭 Modes", value="`/setmode chill|brainrot|unhinged|coder`", inline=False)
-    emb.add_field(name="🏗️ Pipeline",
-                  value="`/pipeline <task> [filename] [iterations]` — GEMINI → DEEPSEEK → review/fix loop",
-                  inline=False)
-    emb.add_field(name="🖼️ Image", value="`/render <prompt> [mode]` · `/rendermode` · `/hf_model`", inline=False)
-    emb.add_field(name="🎙️ TTS",
-                  value="`/tts <character> <text>`\nVoices: verity · jarvis · idksterling · fem · boiledone · mrbeast",
-                  inline=False)
-    emb.add_field(name="🎬 Video / 🎵 Music", value="`/video <prompt>` · `/music <prompt>`", inline=False)
-    emb.add_field(name="📚 Snippets", value="`/snippet` · `/snippets` · `/getsnippet` · `/delsnippet`", inline=False)
-    emb.add_field(name="💬 AI Debate", value="`/debate <topic>`", inline=False)
-    emb.add_field(name="⚙️ Settings",
-                  value="`/change-gemini` `/gemini-models` `/change_llm` `/cur_llm` `/config` `/reset` `/smart` `/fast`",
-                  inline=False)
-    emb.add_field(name="💾 Memory",
-                  value="`/sm` `/persistent` `/persistentdisable` `/persistentreset`", inline=False)
-    emb.add_field(name="📜 Lore", value="`/pen`", inline=False)
+    emb.add_field(name="🏗️ Pipeline", value="`/pipeline <task> [filename] [iterations]`", inline=False)
+    emb.add_field(name="🖼️ Image", value="`/render <prompt> [mode]` · `/rendermode`", inline=False)
+    emb.add_field(name="🎙️ TTS", value="`/tts [voice] <text>`", inline=False)
+    emb.add_field(name="🎬 Media", value="`/video` · `/music`", inline=False)
+    emb.add_field(name="💬 Debate", value="`/debate <topic>`", inline=False)
+    emb.add_field(name="💾 Memory", value="`/sm` `/persistent` `/persistentdisable`", inline=False)
     emb.add_field(name="🏛️ Court", value="`/court` `/role` `/explain-case` `/start-court` `/endcourt`", inline=False)
-    emb.add_field(name="🌍 UMF", value="`/umf` `/umf_recognize` `/umf_list` `/umf_status` `/umf_admin` `/umf_search` `/umf_stats`", inline=False)
-    emb.set_footer(text="Mac v11.0 — vision · Mac vs Sodium lore · brainrot 🔥")
+    emb.add_field(name="🌍 UMF", value="`/umf` `/umf_list` `/umf_status` `/umf_admin`", inline=False)
+    emb.set_footer(text="v21.2 — duplicate-message fix")
     await ctx.send(embed=emb)
 
 
@@ -1511,13 +1908,12 @@ async def help_alias(ctx):
 
 
 # ============================================================
-# CHAT
+# CHAT / SLOTS / MODES / PIPELINE / TTS / IMAGE / MEDIA
 # ============================================================
 @bot.hybrid_command(name="query", description="💬 Talk to Mac")
 async def query_cmd(ctx, message: str):
     await ctx.defer()
     try:
-        # try to grab any images attached to the command's message
         images = await fetch_images_from_message(ctx.message) if ctx.message else []
         await bot.process_user_message(ctx.author, message, ctx.channel,
                                        trigger_msg=ctx.message, images=images)
@@ -1525,26 +1921,6 @@ async def query_cmd(ctx, message: str):
         await ctx.send(f"❌ `{e}`", ephemeral=True)
 
 
-# ============================================================
-# MODES
-# ============================================================
-@bot.hybrid_command(name="setmode", description="🎭 Set the bot's personality mode")
-@app_commands.autocomplete(mode=mode_ac)
-@app_commands.describe(mode="chill | brainrot | unhinged | coder")
-async def setmode_cmd(ctx, mode: str):
-    mode = mode.lower().strip()
-    if mode not in bot.mode_prompts:
-        opts = ", ".join(f"`{m}`" for m in bot.mode_prompts)
-        return await ctx.send(f"❌ Unknown mode. Options: {opts}")
-    bot.current_mode = mode
-    emoji = {"chill": "😎", "brainrot": "🧠", "unhinged": "🔥", "coder": "💻"}.get(mode, "🎭")
-    extra = " — GIFs will be sent with every reply." if mode == "brainrot" else ""
-    await ctx.send(f"{emoji} Mode → **{mode}**{extra}")
-
-
-# ============================================================
-# CHAT SLOTS (sv1–sv5)
-# ============================================================
 def _make_slot_cmd(slot_name: str):
     async def _cmd(ctx):
         uid = ctx.author.id
@@ -1553,18 +1929,17 @@ def _make_slot_cmd(slot_name: str):
         bot.active_slot[uid] = slot_name
         bot._save_slots()
         count = len(bot.user_slots[uid].get(slot_name, []))
-        await ctx.send(f"💾 Switched to **{slot_name}** — {count} messages in this slot.")
-
+        await ctx.send(f"💾 **{slot_name}** — {count} msgs.")
     _cmd.__name__ = f"slot_{slot_name}"
     return _cmd
 
 
 for _i in range(1, 6):
     _name = f"sv{_i}"
-    bot.hybrid_command(name=_name, description=f"🗂️ Switch to chat slot {_name}")(_make_slot_cmd(_name))
+    bot.hybrid_command(name=_name, description=f"🗂️ Switch to slot {_name}")(_make_slot_cmd(_name))
 
 
-@bot.hybrid_command(name="svclear", description="🧹 Clear the current chat slot")
+@bot.hybrid_command(name="svclear", description="🧹 Clear current slot")
 async def svclear(ctx):
     uid = ctx.author.id
     slot = bot.active_slot.get(uid, "sv1")
@@ -1573,7 +1948,7 @@ async def svclear(ctx):
     await ctx.send(f"🧹 Cleared **{slot}**")
 
 
-@bot.hybrid_command(name="svlist", description="📋 Show your 5 chat slots")
+@bot.hybrid_command(name="svlist", description="📋 Your slots")
 async def svlist(ctx):
     uid = ctx.author.id
     if uid not in bot.user_slots:
@@ -1584,18 +1959,30 @@ async def svlist(ctx):
         n = f"sv{i}"
         c = len(bot.user_slots[uid].get(n, []))
         marker = " ← active" if n == active else ""
-        lines.append(f"`{n}`: {c} messages{marker}")
-    emb = discord.Embed(title=f"🗂️ Chat slots — {ctx.author.display_name}",
+        lines.append(f"`{n}`: {c}{marker}")
+    emb = discord.Embed(title=f"🗂️ Slots — {ctx.author.display_name}",
                         description="\n".join(lines), color=C_PRIMARY)
     await ctx.send(embed=emb, ephemeral=True)
 
 
-# ============================================================
-# PIPELINE
-# ============================================================
-@bot.hybrid_command(name="pipeline", description="🏗️ GEMINI → DEEPSEEK → review → fix")
-@app_commands.describe(task="What to build", filename="Output filename (auto if blank)",
-                       iterations="Max review→fix iterations (1-5, default 3)")
+@bot.hybrid_command(name="setmode", description="🎭 Set mode")
+@app_commands.choices(mode=[
+    app_commands.Choice(name="chill", value="chill"),
+    app_commands.Choice(name="brainrot", value="brainrot"),
+    app_commands.Choice(name="unhinged", value="unhinged"),
+    app_commands.Choice(name="coder", value="coder"),
+])
+async def setmode_cmd(ctx, mode: str):
+    if mode not in bot.mode_prompts:
+        return await ctx.send(f"❌ Options: {', '.join(bot.mode_prompts)}")
+    bot.current_mode = mode
+    emoji = {"chill": "😎", "brainrot": "🧠", "unhinged": "🔥", "coder": "💻"}.get(mode, "🎭")
+    extra = " — GIFs on every reply." if mode == "brainrot" else ""
+    await ctx.send(f"{emoji} → **{mode}**{extra}")
+
+
+@bot.hybrid_command(name="pipeline", description="🏗️ GEMINI → OPENROUTER → review → fix")
+@app_commands.describe(task="What to build", filename="Output filename", iterations="Max loops (1-5)")
 async def pipeline_cmd(ctx, task: str, filename: str = None, iterations: int = 3):
     await ctx.defer()
     iterations = max(1, min(5, iterations))
@@ -1603,281 +1990,95 @@ async def pipeline_cmd(ctx, task: str, filename: str = None, iterations: int = 3
     try:
         await bot.run_pipeline(ctx.channel, ctx.author.id, task, fn, iterations)
     except Exception as e:
-        await ctx.send(f"❌ Pipeline error: `{e}`")
+        await ctx.send(f"❌ `{e}`")
 
 
-# ============================================================
-# TTS
-# ============================================================
-@bot.hybrid_command(name="tts", description="Say text as a Discord voice message")
-@app_commands.describe(character="Voice (default: verity)", prompt="Exact text to speak")
-@app_commands.choices(character=[
-    app_commands.Choice(name="🎙️ Verity (default)", value="verity"),
-    app_commands.Choice(name="🤖 Jarvis", value="jarvis"),
-    app_commands.Choice(name="🎭 IdkSterling", value="idksterling"),
-    app_commands.Choice(name="👩 Female", value="fem"),
-    app_commands.Choice(name="☠️ Boiled One (analog horror)", value="boiledone"),
-    app_commands.Choice(name="💸 MrBeast", value="mrbeast"),
-])
-async def tts_cmd(ctx, character: str, prompt: str):
+@bot.hybrid_command(name="tts", description="Say text as a voice message")
+@app_commands.describe(voice="Voice (defaults to /cs voice)", prompt="Text")
+async def tts_cmd(ctx, voice: str = None, prompt: str = None):
     await ctx.defer()
-    character = (character or DEFAULT_VOICE).lower()
-    if character not in VOICE_MODES:
-        character = DEFAULT_VOICE
+    if prompt is None:
+        return await ctx.send("❌ `/tts [voice] <text>`")
+    uid = ctx.author.id
+    voices = bot.all_voices(uid)
+    vkey = (voice or bot.default_voice(uid)).lower()
+    if vkey not in voices:
+        vkey = DEFAULT_VOICE
     clean = strip_for_tts(prompt)
     if not clean:
         return await ctx.send("❌ Nothing to say.")
     try:
-        audio = await bot.generate_voice(clean, voice_key=character, fmt="opus")
+        audio = await bot.generate_voice(clean, uid=uid, voice_key=vkey, fmt="opus")
     except Exception as e:
-        logger.error(f"Fish Audio error: {e}")
-        return await ctx.send(f"❌ TTS error: {str(e)[:200]}")
-    meta = VOICE_MODES[character]
+        return await ctx.send(f"❌ TTS: {str(e)[:150]}")
+    meta = voices[vkey]
     try:
         file = discord.File(io.BytesIO(audio), filename="voice-message.ogg")
         flags = discord.MessageFlags(is_voice_message=True)
         await ctx.send(file=file, flags=flags)
-    except Exception as e:
-        logger.warning(f"Voice flag failed, fallback: {e}")
+    except Exception:
         file2 = discord.File(io.BytesIO(audio), filename="voice.mp3")
-        await ctx.send(content=f"{meta['emoji']} **{meta['desc']}**\n-# {clean[:400]}", file=file2)
+        await ctx.send(content=f"{meta['emoji']} **{meta['desc']}**\n-# {clean[:350]}", file=file2)
 
 
-# ============================================================
-# IMAGE
-# ============================================================
 @bot.hybrid_command(name="render", description="🎨 Generate an image")
-@app_commands.describe(prompt="Describe the image", mode="smart | fast | hf")
+@app_commands.describe(prompt="Describe image", mode="smart | fast | hf")
 async def render_cmd(ctx, prompt: str, mode: str = None):
     await ctx.defer()
+    uid = ctx.author.id
     chosen = (mode or bot.current_image_mode).lower()
-    status_msg = await ctx.send("🔥 Checking your prompt...")
+    status = await ctx.send("🔥 Checking...")
     try:
-        safe, reason = await bot.is_prompt_safe(prompt)
+        safe, reason = await bot.is_prompt_safe(prompt, uid=uid)
         if not safe:
-            return await status_msg.edit(content=f"🚫 **Blocked.**\nReason: {reason}")
-        await status_msg.edit(content=f"🔥 Generating **{chosen}** image...")
+            return await status.edit(content=f"🚫 {reason}")
+        await status.edit(content=f"🔥 Generating **{chosen}**...")
         if chosen in ("hf", "huggingface"):
-            img = await bot.generate_hf_image(prompt)
-            label = f"🤗 HF (`{bot.current_hf_model}`)"
+            img = await bot.generate_hf_image(prompt, uid=uid)
+            label = "🤗 HF"
         elif chosen in ("pollinations", "poll", "fast"):
             img = await bot.generate_pollinations_image(prompt)
             label = "⚡ Pollinations"
         else:
-            img = await bot.generate_gemini_image(prompt)
+            img = await bot.generate_gemini_image(prompt, uid=uid)
             label = "🧠 Gemini"
-        url = await bot.upload_image_to_hosting(img)
-        emb = discord.Embed(title="🖼️ Generated", description=f"**Backend:** {label}", color=C_PRIMARY)
+        url = await bot.upload_image_to_hosting(img, uid=uid)
+        emb = discord.Embed(title="🖼️", description=f"**{label}**", color=C_PRIMARY)
         emb.set_image(url=url)
         emb.add_field(name="Prompt", value=prompt[:1024], inline=False)
-        await status_msg.edit(content=None, embed=emb)
+        await status.edit(content=None, embed=emb)
     except Exception as e:
-        await status_msg.edit(content=f"❌ `{str(e)[:180]}`")
+        await status.edit(content=f"❌ `{str(e)[:180]}`")
 
 
-@bot.hybrid_command(name="rendermode", description="🖼️ Show or change default image mode")
+@bot.hybrid_command(name="rendermode", description="🖼️ Image mode")
 async def rendermode_cmd(ctx, mode: str = None):
     if mode is None:
         emb = discord.Embed(title="🖼️ Image Mode", color=C_PRIMARY)
         emb.add_field(name="Current", value=f"`{bot.current_image_mode}`", inline=False)
-        emb.add_field(name="Options",
-                      value="• `smart` → Gemini\n• `fast` → Pollinations\n"
-                            f"• `hf` → Hugging Face (`{bot.current_hf_model}`)", inline=False)
+        emb.add_field(name="Options", value="• `smart` Gemini\n• `fast` Pollinations\n• `hf` Hugging Face", inline=False)
         return await ctx.send(embed=emb)
-    mode = mode.lower()
-    if mode not in ("smart", "fast", "hf"):
-        return await ctx.send("❌ Mode must be `smart`, `fast`, or `hf`")
-    bot.current_image_mode = mode
-    await ctx.send(f"✅ Image mode → **{mode}**")
+    if mode.lower() not in ("smart", "fast", "hf"):
+        return await ctx.send("❌ smart / fast / hf")
+    bot.current_image_mode = mode.lower()
+    await ctx.send(f"✅ → **{mode}**")
 
 
-@bot.hybrid_command(name="hf_model", description="Show or change the HF image model")
-async def hf_model_cmd(ctx, model: str = None):
-    if model is None:
-        listing = "\n".join(f"• `{m}`" for m in HF_IMAGE_MODELS)
-        return await ctx.send(
-            f"🤗 Current: `{bot.current_hf_model}`\n\nFallback list (tried in order):\n{listing}")
-    bot.current_hf_model = model
-    await ctx.send(f"✅ HF image model → `{model}`")
-
-
-# ============================================================
-# MEDIA
-# ============================================================
 @bot.hybrid_command(name="video", description="🎬 Generate a video")
 async def video_cmd(ctx, prompt: str):
     await ctx.defer()
-    status_msg = await ctx.send(f"🎬 Starting video: **{prompt}**...")
-    bot.loop.create_task(bot.generate_video(prompt, ctx.author.id, status_msg))
+    status = await ctx.send(f"🎬 **{prompt}**...")
+    bot.loop.create_task(bot.generate_video(prompt, ctx.author.id, status))
 
 
 @bot.hybrid_command(name="music", description="🎵 Generate music")
 async def music_cmd(ctx, prompt: str):
     await ctx.defer()
-    status_msg = await ctx.send(f"🎵 Starting music: **{prompt}**...")
-    bot.loop.create_task(bot.generate_music(prompt, ctx.author.id, status_msg))
+    status = await ctx.send(f"🎵 **{prompt}**...")
+    bot.loop.create_task(bot.generate_music(prompt, ctx.author.id, status))
 
 
-# ============================================================
-# SETTINGS
-# ============================================================
-@bot.hybrid_command(name="smart", description="🧠 Smart mode (search + Gemini)")
-async def smart_mode(ctx):
-    bot.current_image_mode = "smart"
-    bot.complex_mode = True
-    await ctx.send("🧠 Smart mode")
-
-
-@bot.hybrid_command(name="fast", description="⚡ Fast mode (search + Pollinations)")
-async def fast_mode(ctx):
-    bot.current_image_mode = "fast"
-    bot.complex_mode = True
-    await ctx.send("⚡ Fast mode")
-
-
-@bot.hybrid_command(name="change-gemini", description="🔮 Change Gemini model (primary)")
-@app_commands.autocomplete(name=gemini_ac)
-async def change_gemini(ctx, name: str):
-    if name not in GEMINI_MODELS:
-        return await ctx.send(f"❌ Options: {', '.join(GEMINI_MODELS)}")
-    bot.current_gemini_model = name
-    await ctx.send(f"🔮 Gemini → **{name}**")
-
-
-@bot.hybrid_command(name="gemini-models", description="🔮 List Gemini models")
-async def gemini_models_cmd(ctx):
-    s = "\n".join(f"- {m}" + (" ✅" if m == bot.current_gemini_model else "") for m in GEMINI_MODELS)
-    await ctx.send(f"🔮 **Gemini Models**\n{s}\n\nUse `/change-gemini`.")
-
-
-@bot.hybrid_command(name="change_llm", description="🤖 Change the Groq FALLBACK model")
-@app_commands.autocomplete(name=llm_ac)
-async def change_llm(ctx, name: str):
-    if name not in bot.allowed_llms:
-        return await ctx.send(f"❌ Options: {', '.join(bot.allowed_llms)}")
-    bot.current_llm = bot.allowed_llms[name]
-    try:
-        bot.current_model_index = bot.current_model_list.index(bot.current_llm)
-    except ValueError:
-        bot.current_model_index = 0
-    await ctx.send(f"🤖 Groq fallback → **{name}**")
-
-
-@bot.hybrid_command(name="cur_llm", description="🤖 Show current models")
-async def cur_llm(ctx):
-    await ctx.send(
-        f"🔮 **Gemini (primary):** `{bot.current_gemini_model}`\n"
-        f"🤖 **Groq (fallback):** `{bot.current_llm}`\n"
-        f"🖼️ **Image mode:** `{bot.current_image_mode}`\n"
-        f"🤗 **HF model:** `{bot.current_hf_model}`\n"
-        f"🧬 **Pipeline gen:** `{PIPELINE_GENERATOR_MODEL}`\n"
-        f"🎭 **Mode:** `{bot.current_mode}`"
-    )
-
-
-@bot.hybrid_command(name="config", description="⚙️ Show settings")
-async def config_cmd(ctx):
-    emb = discord.Embed(title="⚙️ Config", color=C_PRIMARY)
-    emb.add_field(name="Mode", value=f"`{bot.current_mode}`", inline=True)
-    emb.add_field(name="Gemini", value=f"`{bot.current_gemini_model}`", inline=True)
-    emb.add_field(name="Groq fallback", value=f"`{bot.current_llm}`", inline=True)
-    emb.add_field(name="Image", value=f"`{bot.current_image_mode}`", inline=True)
-    emb.add_field(name="HF model", value=f"`{bot.current_hf_model}`", inline=True)
-    emb.add_field(name="Memory", value="ON" if bot.memory_enabled else "OFF", inline=True)
-    emb.add_field(name="Active slot", value=f"`{bot.active_slot.get(ctx.author.id, 'sv1')}`", inline=True)
-    emb.add_field(name="Vision", value="ON (Gemini)", inline=True)
-    await ctx.send(embed=emb)
-
-
-@bot.hybrid_command(name="reset", description="Soft reset")
-async def reset_cmd(ctx):
-    bot.memory_enabled = True
-    bot.saved_memory.clear()
-    bot.current_mode = DEFAULT_MODE
-    await ctx.send("🔄 Reset")
-
-
-# ============================================================
-# MEMORY
-# ============================================================
-@bot.hybrid_command(name="sm", description="Toggle memory")
-async def sm(ctx):
-    bot.memory_enabled = not bot.memory_enabled
-    await ctx.send(f"🧠 Memory **{'ON' if bot.memory_enabled else 'OFF'}**")
-
-
-@bot.hybrid_command(name="persistent", description="Enable persistent memory")
-async def persistent_enable(ctx):
-    bot.set_persistent_enabled(ctx.author.id, True)
-    await ctx.send(f"✅ Persistent memory ON for {ctx.author.display_name}")
-
-
-@bot.hybrid_command(name="persistentdisable", description="Disable persistent memory")
-async def persistent_disable(ctx):
-    bot.set_persistent_enabled(ctx.author.id, False)
-    await ctx.send("🚫 Persistent memory OFF")
-
-
-@bot.hybrid_command(name="persistentreset", description="Reset a user's persistent memory (admin)")
-async def persistent_reset(ctx, target_user: discord.User):
-    if not ctx.author.guild_permissions.administrator:
-        return await ctx.send("❌ Admin only")
-    bot.clear_persistent_memory(target_user.id)
-    await ctx.send(f"🧹 Reset for {target_user.display_name}")
-
-
-# ============================================================
-# SNIPPETS
-# ============================================================
-async def _send_code(channel, code, filename, note=""):
-    code = strip_code_fences(code)
-    ext = filename.rsplit(".", 1)[-1] if "." in filename else "txt"
-    if len(code) > 1900:
-        buf = io.BytesIO(code.encode("utf-8"))
-        await safe_send(channel, content=note or f"📄 `{filename}`",
-                        file=discord.File(buf, filename=filename))
-    else:
-        await safe_send(channel, content=(note + "\n" if note else "") + f"```{ext}\n{code}\n```")
-
-
-@bot.hybrid_command(name="snippet", description="💾 Save a code snippet")
-async def snippet_save(ctx, name: str, code: str):
-    bot.snippets[ctx.author.id][name] = {"code": code, "created": datetime.now().isoformat()}
-    bot._save_snippets()
-    await ctx.send(f"💾 Snippet **{name}** saved ({len(code)} chars)")
-
-
-@bot.hybrid_command(name="snippets", description="📚 List your snippets")
-async def snippet_list(ctx):
-    s = bot.snippets.get(ctx.author.id, {})
-    if not s:
-        return await ctx.send("No snippets saved.")
-    lines = "\n".join(f"• **{n}** ({len(v['code'])} chars)" for n, v in s.items())
-    await send_long(ctx, f"📚 **Your Snippets**\n{lines}")
-
-
-@bot.hybrid_command(name="getsnippet", description="📄 Fetch a snippet")
-async def snippet_get(ctx, name: str):
-    s = bot.snippets.get(ctx.author.id, {}).get(name)
-    if not s:
-        return await ctx.send("❌ Not found.")
-    await _send_code(ctx.channel, s["code"], f"{name}.txt", note=f"📄 `{name}`")
-
-
-@bot.hybrid_command(name="delsnippet", description="🗑️ Delete a snippet")
-async def snippet_delete(ctx, name: str):
-    s = bot.snippets.get(ctx.author.id, {})
-    if name not in s:
-        return await ctx.send("❌ Not found.")
-    s.pop(name)
-    bot._save_snippets()
-    await ctx.send(f"🗑️ Deleted **{name}**")
-
-
-# ============================================================
-# AI DEBATE
-# ============================================================
-@bot.hybrid_command(name="debate", description="🤖 Start/stop AI-to-AI debate")
+@bot.hybrid_command(name="debate", description="🤖 Start/stop AI debate")
 async def debate_cmd(ctx, description: str = None):
     uid = ctx.author.id
     if uid in bot.ai_chat_sessions:
@@ -1885,23 +2086,41 @@ async def debate_cmd(ctx, description: str = None):
         t = s.get("task") if s else None
         if t and not t.done():
             t.cancel()
-        return await ctx.send("🛑 Debate stopped.")
+        return await ctx.send("🛑 Stopped.")
     if not description:
         return await ctx.send("❌ Give a topic.")
     s = {"description": description, "history": [], "turn": 0,
          "channel_id": ctx.channel.id, "task": None}
     bot.ai_chat_sessions[uid] = s
     s["task"] = asyncio.create_task(bot.run_ai_chat(uid))
-    await ctx.send(f"🔥 Debate started — **{description}**\n`/debate` again to stop.")
+    await ctx.send(f"🔥 **{description}**")
 
 
 # ============================================================
-# LORE
+# MEMORY / MISC
 # ============================================================
+@bot.hybrid_command(name="sm", description="Toggle memory")
+async def sm(ctx):
+    bot.memory_enabled = not bot.memory_enabled
+    await ctx.send(f"🧠 {'ON' if bot.memory_enabled else 'OFF'}")
+
+
+@bot.hybrid_command(name="persistent", description="Enable persistent memory")
+async def persistent_enable(ctx):
+    bot.set_persistent_enabled(ctx.author.id, True)
+    await ctx.send("✅ Persistent ON")
+
+
+@bot.hybrid_command(name="persistentdisable", description="Disable persistent memory")
+async def persistent_disable(ctx):
+    bot.set_persistent_enabled(ctx.author.id, False)
+    await ctx.send("🚫 Persistent OFF")
+
+
 @bot.hybrid_command(name="pen", description="📜 Pen archive")
 async def pen_cmd(ctx):
     s = bot.pen_archive[:1000] if bot.pen_archive else "Not loaded"
-    await ctx.send(f"📜 **Pen Archive**\n```\n{s}\n```\n[Full](https://github.com/Pen-123/archive-)")
+    await ctx.send(f"📜\n```\n{s}\n```")
 
 
 # ============================================================
@@ -1915,64 +2134,57 @@ class CourtRoleView(discord.ui.View):
     async def select_role(self, interaction, role_key):
         self.bot.court_sessions[interaction.user.id] = {"role": role_key, "case": "", "participants": {}}
         await interaction.response.edit_message(
-            content=(f"✅ You are now **{role_key.capitalize()}**.\n"
-                     f"Use `/explain-case`, `/role`, `/start-court`."),
-            view=None,
-        )
+            content=f"✅ **{role_key.capitalize()}**. Use `/explain-case`, `/role`, `/start-court`.",
+            view=None)
 
     @discord.ui.button(label="Judge", style=discord.ButtonStyle.primary)
-    async def judge_btn(self, i, b): await self.select_role(i, "judge")
-
+    async def j(self, i, b): await self.select_role(i, "judge")
     @discord.ui.button(label="Prosecutor", style=discord.ButtonStyle.danger)
-    async def pros_btn(self, i, b): await self.select_role(i, "prosecutor")
-
+    async def p(self, i, b): await self.select_role(i, "prosecutor")
     @discord.ui.button(label="Defense", style=discord.ButtonStyle.success)
-    async def def_btn(self, i, b): await self.select_role(i, "defense")
-
+    async def d(self, i, b): await self.select_role(i, "defense")
     @discord.ui.button(label="Witness", style=discord.ButtonStyle.secondary)
-    async def wit_btn(self, i, b): await self.select_role(i, "witness")
-
+    async def w(self, i, b): await self.select_role(i, "witness")
     @discord.ui.button(label="Jury", style=discord.ButtonStyle.secondary)
-    async def jury_btn(self, i, b): await self.select_role(i, "jury")
-
+    async def y(self, i, b): await self.select_role(i, "jury")
     @discord.ui.button(label="Stenographer", style=discord.ButtonStyle.secondary)
-    async def sten_btn(self, i, b): await self.select_role(i, "stenographer")
+    async def s(self, i, b): await self.select_role(i, "stenographer")
 
 
-@bot.hybrid_command(name="court", description="🏛️ Start a court session")
+@bot.hybrid_command(name="court", description="🏛️ Court session")
 async def court_cmd(ctx):
-    await ctx.send("🏛️ **Court session** — pick your role:", view=CourtRoleView(bot))
+    await ctx.send("🏛️ Pick role:", view=CourtRoleView(bot))
 
 
-@bot.hybrid_command(name="role", description="🏛️ Assign a court role")
+@bot.hybrid_command(name="role", description="🏛️ Assign role")
 async def role_cmd(ctx, user: discord.User, role: str):
     if ctx.author.id not in bot.court_sessions:
-        return await ctx.send("❌ Start with `/court` first.")
+        return await ctx.send("❌ `/court` first.")
     valid = ["prosecutor", "defense", "witness", "jury", "stenographer", "judge"]
     if role.lower() not in valid:
-        return await ctx.send(f"❌ Pick from: {', '.join(valid)}")
+        return await ctx.send(f"❌ {', '.join(valid)}")
     bot.court_sessions[ctx.author.id]["participants"][role.lower()] = user.id
-    await ctx.send(f"✅ {user.mention} → **{role.capitalize()}**")
+    await ctx.send(f"✅ {user.mention} → **{role}**")
 
 
-@bot.hybrid_command(name="explain-case", description="🏛️ Add case details")
+@bot.hybrid_command(name="explain-case", description="🏛️ Add case")
 async def explain_case(ctx, case: str):
     if ctx.author.id not in bot.court_sessions:
-        return await ctx.send("❌ Start with `/court` first.")
+        return await ctx.send("❌ `/court` first.")
     bot.court_sessions[ctx.author.id]["case"] = case
-    await ctx.send("✅ Case recorded. `/start-court` to begin.")
+    await ctx.send("✅ `/start-court`")
 
 
-@bot.hybrid_command(name="start-court", description="🏛️ Start the session")
+@bot.hybrid_command(name="start-court", description="🏛️ Start")
 async def start_court(ctx):
     if ctx.author.id not in bot.court_sessions:
-        return await ctx.send("❌ Start with `/court` first.")
+        return await ctx.send("❌ `/court` first.")
     s = bot.court_sessions[ctx.author.id]
     if not s.get("case"):
-        return await ctx.send("❌ Add case with `/explain-case` first.")
+        return await ctx.send("❌ `/explain-case` first.")
     p = s.get("participants", {})
     if p:
-        out = "🏛️ **Court in session!**\n"
+        out = "🏛️ **In session!**\n"
         for r, uid in p.items():
             u = ctx.guild.get_member(uid) if ctx.guild else bot.get_user(uid)
             out += f"**{r.capitalize()}**: {u.mention if u else f'<@{uid}>'}\n"
@@ -1980,13 +2192,11 @@ async def start_court(ctx):
     await ctx.send("Begin.")
 
 
-@bot.hybrid_command(name="endcourt", description="🏛️ End the session")
+@bot.hybrid_command(name="endcourt", description="🏛️ End")
 async def endcourt_cmd(ctx):
     if ctx.author.id in bot.court_sessions:
         del bot.court_sessions[ctx.author.id]
         await ctx.send("🏛️ Ended.")
-    else:
-        await ctx.send("❌ Not in a session.")
 
 
 # ============================================================
@@ -2019,146 +2229,76 @@ class UMFData:
             json.dump(self.data, f, indent=4)
 
     def get_recognized_nations(self): return self.data.get("recognized_nations", [])
-    def add_recognized_nation(self, nation):
-        nations = self.get_recognized_nations()
-        if nation not in nations:
-            nations.append(nation)
-            self.data["recognized_nations"] = nations
-            self.save()
-            return True
+
+    def add_recognized_nation(self, n):
+        ns = self.get_recognized_nations()
+        if n not in ns:
+            ns.append(n); self.data["recognized_nations"] = ns; self.save(); return True
         return False
 
-    def add_pending_request(self, user_id, nation, username):
-        req = {"user_id": user_id, "username": username, "nation": nation,
+    def add_pending_request(self, uid, nation, username):
+        req = {"user_id": uid, "username": username, "nation": nation,
                "timestamp": datetime.now().isoformat(), "status": "pending"}
-        self.data["pending_requests"].append(req)
-        self.save()
-        return req
+        self.data["pending_requests"].append(req); self.save(); return req
 
     def get_pending_requests(self): return self.data.get("pending_requests", [])
 
-    def approve_request(self, user_id):
-        pending = self.data.get("pending_requests", [])
-        for i, req in enumerate(pending):
-            if req["user_id"] == user_id and req["status"] == "pending":
-                req["status"] = "approved"
-                req["approved_at"] = datetime.now().isoformat()
-                self.data["approved_requests"].append(req)
-                pending.pop(i)
-                self.data["pending_requests"] = pending
-                self.save()
-                return req
+    def approve_request(self, uid):
+        for i, r in enumerate(self.data.get("pending_requests", [])):
+            if r["user_id"] == uid and r["status"] == "pending":
+                r["status"] = "approved"
+                r["approved_at"] = datetime.now().isoformat()
+                self.data["approved_requests"].append(r)
+                self.data["pending_requests"].pop(i); self.save(); return r
         return None
 
-    def deny_request(self, user_id, reason=""):
-        pending = self.data.get("pending_requests", [])
-        for i, req in enumerate(pending):
-            if req["user_id"] == user_id and req["status"] == "pending":
-                req["status"] = "denied"
-                req["denied_reason"] = reason
-                req["denied_at"] = datetime.now().isoformat()
-                self.data["denied_requests"].append(req)
-                pending.pop(i)
-                self.data["pending_requests"] = pending
-                self.save()
-                return req
+    def deny_request(self, uid, reason=""):
+        for i, r in enumerate(self.data.get("pending_requests", [])):
+            if r["user_id"] == uid and r["status"] == "pending":
+                r["status"] = "denied"
+                r["denied_reason"] = reason
+                r["denied_at"] = datetime.now().isoformat()
+                self.data["denied_requests"].append(r)
+                self.data["pending_requests"].pop(i); self.save(); return r
         return None
 
-    def get_request_status(self, user_id):
-        for bucket in ("pending_requests", "approved_requests", "denied_requests"):
-            for req in self.data.get(bucket, []):
-                if req["user_id"] == user_id:
-                    return req
+    def get_request_status(self, uid):
+        for b in ("pending_requests", "approved_requests", "denied_requests"):
+            for r in self.data.get(b, []):
+                if r["user_id"] == uid:
+                    return r
         return None
 
-    def is_nation_recognized(self, nation): return nation in self.get_recognized_nations()
+    def is_nation_recognized(self, n): return n in self.get_recognized_nations()
 
-    def add_to_history(self, action, user_id, username, nation, details=""):
+    def add_to_history(self, action, uid, username, nation, details=""):
         self.data["recognition_history"].append({
-            "action": action, "user_id": user_id, "username": username,
-            "nation": nation, "timestamp": datetime.now().isoformat(),
-            "details": details})
+            "action": action, "user_id": uid, "username": username,
+            "nation": nation, "timestamp": datetime.now().isoformat(), "details": details})
         self.save()
 
 
 bot.umf_data = UMFData()
 
 
-def umf_requirements_embed():
-    emb = discord.Embed(title="🌍 UMF Recognition System",
-                        description="To be recognized by the **United Military Federation (UMF)**:",
-                        color=C_PRIMARY, timestamp=datetime.now())
-    emb.add_field(name="📋 Requirements", value=(
-        "1. **Administrative User** — an admin user in the UMF.\n"
-        "2. **Relay Link** — nation relay-linked to the UMF network.\n"
-        "3. **Active Status** — nation actively participating."
-    ), inline=False)
-    emb.add_field(name="📝 How to Apply",
-                  value="Click **'Request Recognition'**, enter your nation name.", inline=False)
-    emb.add_field(name="✅ Currently Recognized",
-                  value=f"**{len(bot.umf_data.get_recognized_nations())}** nations", inline=False)
-    return emb
-
-
-def umf_nation_list_embed(page=0, per_page=15):
-    nations = bot.umf_data.get_recognized_nations()
-    total = len(nations)
-    pages = max(1, (total + per_page - 1) // per_page)
-    page = max(0, min(page, pages - 1))
-    start = page * per_page
-    end = min(start + per_page, total)
-    emb = discord.Embed(title="🌍 Recognized UMF Nations", color=C_ACCENT, timestamp=datetime.now())
-    emb.description = ("```\n" + "\n".join(f"• {n}" for n in nations[start:end]) + "\n```"
-                       if nations[start:end] else "No nations recognized yet.")
-    emb.set_footer(text=f"Page {page + 1}/{pages} • Total: {total}")
-    return emb
-
-
-def umf_status_embed(req):
-    nation = req.get("nation", "Unknown")
-    status = req.get("status", "unknown")
-    if status == "pending":
-        color, title, desc = C_WARM, "⏳ Pending", f"Request for **{nation}** is under review."
-    elif status == "approved":
-        color, title, desc = C_OK, "✅ Approved!", f"**{nation}** is officially recognized."
-    elif status == "denied":
-        color, title, desc = C_ERR, "❌ Denied", (
-            f"**{nation}** was denied.\nReason: {req.get('denied_reason', 'No reason given')}")
-    else:
-        color, title, desc = C_DEEP, "ℹ️ No Request", "You have no active request."
-    emb = discord.Embed(title=title, description=desc, color=color, timestamp=datetime.now())
-    emb.add_field(name="📋 Nation", value=nation, inline=True)
-    if "timestamp" in req:
-        emb.add_field(name="📅 Submitted",
-                      value=datetime.fromisoformat(req["timestamp"]).strftime("%B %d, %Y %H:%M"),
-                      inline=True)
-    return emb
-
-
-class UMFRecognitionModal(discord.ui.Modal, title="🌍 UMF Recognition Request"):
+class UMFRecognitionModal(discord.ui.Modal, title="🌍 UMF Recognition"):
     nation_name = discord.ui.TextInput(label="Nation Name", required=True, max_length=100)
-    additional = discord.ui.TextInput(label="Additional Info (optional)", required=False,
-                                      max_length=500, style=discord.TextStyle.paragraph)
+    additional = discord.ui.TextInput(label="Additional Info", required=False, max_length=500,
+                                      style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction):
         nation = self.nation_name.value.strip()
         if bot.umf_data.is_nation_recognized(nation):
-            return await interaction.response.send_message(
-                f"⚠️ **{nation}** is already recognized.", ephemeral=True)
+            return await interaction.response.send_message("⚠️ Already recognized.", ephemeral=True)
         existing = bot.umf_data.get_request_status(interaction.user.id)
         if existing and existing.get("status") == "pending":
-            return await interaction.response.send_message(
-                "⏳ You already have a pending request.", ephemeral=True)
+            return await interaction.response.send_message("⏳ Already pending.", ephemeral=True)
         bot.umf_data.add_pending_request(interaction.user.id, nation, interaction.user.display_name)
-        bot.umf_data.add_to_history("REQUEST_SUBMITTED", interaction.user.id,
-                                    interaction.user.display_name, nation,
-                                    f"Additional: {self.additional.value or 'None'}")
-        emb = discord.Embed(title="✅ Request Submitted",
-                            description=f"**{nation}** is pending review.", color=C_OK)
+        emb = discord.Embed(title="✅ Submitted", description=f"**{nation}** pending.", color=C_OK)
         await interaction.response.send_message(embed=emb, ephemeral=True)
 
 
-class UMFDenyModal(discord.ui.Modal, title="❌ Deny Request"):
+class UMFDenyModal(discord.ui.Modal, title="❌ Deny"):
     reason = discord.ui.TextInput(label="Reason", required=True, max_length=200,
                                   style=discord.TextStyle.paragraph)
 
@@ -2168,21 +2308,12 @@ class UMFDenyModal(discord.ui.Modal, title="❌ Deny Request"):
         self.user = user
 
     async def on_submit(self, interaction):
-        reason = self.reason.value.strip()
-        denied = bot.umf_data.deny_request(self.req["user_id"], reason)
-        if not denied:
-            return await interaction.response.edit_message(content="❌ Already processed.", view=None)
-        bot.umf_data.add_to_history("DENIED", denied["user_id"], denied["username"],
-                                    denied["nation"], f"Reason: {reason}")
-        emb = discord.Embed(title="❌ Denied", description=f"**{denied['nation']}** denied.", color=C_ERR)
-        emb.add_field(name="👤 Applicant", value=self.user.mention, inline=True)
-        emb.add_field(name="📝 Reason", value=reason, inline=False)
-        await interaction.response.edit_message(embed=emb, view=None)
+        bot.umf_data.deny_request(self.req["user_id"], self.reason.value.strip())
+        await interaction.response.edit_message(content="❌ Denied.", view=None)
 
 
 class UMFPrimaryView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=300)
+    def __init__(self): super().__init__(timeout=300)
 
     @discord.ui.button(label="📝 Request Recognition", style=discord.ButtonStyle.primary, emoji="🌍")
     async def request_btn(self, interaction, button):
@@ -2190,13 +2321,20 @@ class UMFPrimaryView(discord.ui.View):
 
     @discord.ui.button(label="📋 View Nations", style=discord.ButtonStyle.secondary, emoji="📋")
     async def list_btn(self, interaction, button):
-        await interaction.response.send_message(embed=umf_nation_list_embed(), ephemeral=True)
+        nations = bot.umf_data.get_recognized_nations()
+        emb = discord.Embed(title="🌍 Recognized Nations",
+                            description="\n".join(f"• {n}" for n in nations[:25]) or "None.",
+                            color=C_ACCENT)
+        await interaction.response.send_message(embed=emb, ephemeral=True)
 
     @discord.ui.button(label="ℹ️ My Status", style=discord.ButtonStyle.secondary, emoji="ℹ️")
     async def status_btn(self, interaction, button):
         req = bot.umf_data.get_request_status(interaction.user.id)
-        emb = umf_status_embed(req) if req else discord.Embed(
-            title="ℹ️ No Request", description="No active request.", color=C_DEEP)
+        if req:
+            emb = discord.Embed(title=req["status"].upper(),
+                                description=f"**{req.get('nation','')}**", color=C_PRIMARY)
+        else:
+            emb = discord.Embed(title="No Request", description="No active request.", color=C_DEEP)
         await interaction.response.send_message(embed=emb, ephemeral=True)
 
 
@@ -2212,15 +2350,10 @@ class UMFAdminView(discord.ui.View):
             return await interaction.response.send_message("⛔ Admin only.", ephemeral=True)
         approved = bot.umf_data.approve_request(self.req["user_id"])
         if not approved:
-            return await interaction.response.edit_message(content="❌ Already processed.", view=None)
-        nation = approved["nation"]
-        bot.umf_data.add_recognized_nation(nation)
-        bot.umf_data.add_to_history("APPROVED", approved["user_id"], approved["username"],
-                                    nation, f"Approved by {interaction.user}")
-        emb = discord.Embed(title="✅ Approved!", description=f"**{nation}** recognized.", color=C_OK)
-        emb.add_field(name="👤 Applicant", value=self.user.mention, inline=True)
-        emb.add_field(name="✅ By", value=interaction.user.mention, inline=True)
-        await interaction.response.edit_message(embed=emb, view=None)
+            return await interaction.response.edit_message(content="Processed.", view=None)
+        bot.umf_data.add_recognized_nation(approved["nation"])
+        await interaction.response.edit_message(
+            content=f"✅ **{approved['nation']}** recognized.", view=None)
 
     @discord.ui.button(label="❌ Deny", style=discord.ButtonStyle.danger, emoji="❌")
     async def deny_btn(self, interaction, button):
@@ -2229,74 +2362,47 @@ class UMFAdminView(discord.ui.View):
         await interaction.response.send_modal(UMFDenyModal(self.req, self.user))
 
 
-@bot.hybrid_command(name="umf", description="🌍 UMF Recognition System")
+@bot.hybrid_command(name="umf", description="🌍 UMF")
 async def umf_command(ctx):
-    await ctx.send(embed=umf_requirements_embed(), view=UMFPrimaryView())
+    emb = discord.Embed(title="🌍 UMF Recognition",
+                        description="Request recognition from the United Military Federation.",
+                        color=C_PRIMARY)
+    await ctx.send(embed=emb, view=UMFPrimaryView())
 
 
-@bot.hybrid_command(name="umf_recognize", description="🌍 Request UMF recognition")
-async def umf_recognize(ctx):
-    if ctx.interaction:
-        await ctx.interaction.response.send_modal(UMFRecognitionModal())
-    else:
-        await ctx.send("Use `/umf` to submit.")
-
-
-@bot.hybrid_command(name="umf_list", description="📋 List recognized nations")
+@bot.hybrid_command(name="umf_list", description="📋 Recognized")
 async def umf_list(ctx):
-    await ctx.send(embed=umf_nation_list_embed())
+    nations = bot.umf_data.get_recognized_nations()
+    emb = discord.Embed(title="🌍 Recognized Nations",
+                        description="\n".join(f"• {n}" for n in nations[:25]) or "None.",
+                        color=C_ACCENT)
+    await ctx.send(embed=emb)
 
 
-@bot.hybrid_command(name="umf_status", description="ℹ️ Check your request status")
+@bot.hybrid_command(name="umf_status", description="ℹ️ Your status")
 async def umf_status(ctx):
     req = bot.umf_data.get_request_status(ctx.author.id)
-    emb = umf_status_embed(req) if req else discord.Embed(
-        title="ℹ️ No Request", description="No active request.", color=C_DEEP)
+    if req:
+        emb = discord.Embed(title=req["status"].upper(),
+                            description=f"**{req.get('nation','')}**", color=C_PRIMARY)
+    else:
+        emb = discord.Embed(title="No Request", description="No active request.", color=C_DEEP)
     await ctx.send(embed=emb, ephemeral=True)
 
 
-@bot.hybrid_command(name="umf_admin", description="🔧 Admin panel")
+@bot.hybrid_command(name="umf_admin", description="🔧 Admin")
 async def umf_admin(ctx):
     if not ctx.author.guild_permissions.administrator:
         return await ctx.send("⛔ Admin only.", ephemeral=True)
     pending = bot.umf_data.get_pending_requests()
     if not pending:
-        return await ctx.send("📭 No pending requests.", ephemeral=True)
+        return await ctx.send("📭 None pending.", ephemeral=True)
     req = pending[0]
     user = ctx.guild.get_member(req["user_id"]) or await ctx.guild.fetch_member(req["user_id"])
-    emb = discord.Embed(title="📋 Pending Request", color=C_WARM)
-    emb.add_field(name="👤 Applicant", value=user.mention if user else f"<@{req['user_id']}>", inline=True)
-    emb.add_field(name="🌍 Nation", value=req["nation"], inline=True)
-    emb.add_field(name="📅 Submitted",
-                  value=datetime.fromisoformat(req["timestamp"]).strftime("%B %d, %Y %H:%M"), inline=True)
-    emb.add_field(name="📊 Total", value=str(len(pending)), inline=True)
+    emb = discord.Embed(title="📋 Pending", color=C_WARM)
+    emb.add_field(name="Applicant", value=user.mention if user else f"<@{req['user_id']}>", inline=True)
+    emb.add_field(name="Nation", value=req["nation"], inline=True)
     await ctx.send(embed=emb, view=UMFAdminView(req, user), ephemeral=True)
-
-
-@bot.hybrid_command(name="umf_search", description="🔍 Search nations")
-async def umf_search(ctx, query: str):
-    nations = bot.umf_data.get_recognized_nations()
-    matches = [n for n in nations if query.lower() in n.lower()]
-    if matches:
-        emb = discord.Embed(title=f"🔍 '{query}'",
-                            description=f"Found **{len(matches)}**:\n```\n" +
-                                        "\n".join(f"• {n}" for n in matches[:25]) + "\n```",
-                            color=C_ACCENT)
-    else:
-        emb = discord.Embed(title=f"🔍 No results for '{query}'", color=C_ERR)
-    await ctx.send(embed=emb, ephemeral=True)
-
-
-@bot.hybrid_command(name="umf_stats", description="📊 UMF statistics")
-async def umf_stats(ctx):
-    d = bot.umf_data.data
-    emb = discord.Embed(title="📊 UMF Statistics", color=C_PRIMARY, timestamp=datetime.now())
-    emb.add_field(name="🌍 Recognized", value=str(len(d.get("recognized_nations", []))), inline=True)
-    emb.add_field(name="⏳ Pending", value=str(len(d.get("pending_requests", []))), inline=True)
-    emb.add_field(name="✅ Approved", value=str(len(d.get("approved_requests", []))), inline=True)
-    emb.add_field(name="❌ Denied", value=str(len(d.get("denied_requests", []))), inline=True)
-    emb.add_field(name="📜 History", value=str(len(d.get("recognition_history", []))), inline=True)
-    await ctx.send(embed=emb, ephemeral=True)
 
 
 # ============================================================
@@ -2306,9 +2412,7 @@ async def umf_stats(ctx):
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
-
     content = message.content or ""
-
     is_dm = isinstance(message.channel, discord.DMChannel)
     is_mentioned = (
         bot.user in message.mentions
@@ -2316,12 +2420,10 @@ async def on_message(message: discord.Message):
         or f"<@!{bot.user.id}>" in content
         or is_dm
     )
-
     if not is_mentioned:
         await bot.process_commands(message)
         return
 
-    # ---- reply context + image vision ----
     reply_context = None
     reply_msg = None
     if message.reference:
@@ -2334,12 +2436,11 @@ async def on_message(message: discord.Message):
         if isinstance(resolved, discord.Message) and resolved.author.id != bot.user.id:
             reply_context = {
                 "author": resolved.author.display_name,
-                "content": (resolved.content or "[no text]")[:1000],
+                "content": (resolved.content or "[no text]")[:800],
                 "author_id": resolved.author.id,
             }
             reply_msg = resolved
 
-    # Images: prefer the current message; if none, use the replied message's images
     images = await fetch_images_from_message(message)
     if not images and reply_msg is not None:
         images = await fetch_images_from_message(reply_msg)
@@ -2357,21 +2458,16 @@ async def on_message(message: discord.Message):
     if not clean:
         return
 
-    logger.info(
-        f"Message from {message.author} in #{getattr(message.channel, 'name', 'DM')}: "
-        f"{clean[:100]!r} | images={len(images)}"
-    )
     await bot.process_user_message(
         message.author, clean, message.channel,
-        reply_context=reply_context, trigger_msg=message, images=images,
-    )
+        reply_context=reply_context, trigger_msg=message, images=images)
 
 
 # ============================================================
-# WEB SERVER + MAIN
+# WEB SERVER
 # ============================================================
 async def handle_root(request):
-    return web.Response(text="🔥 Mac is running!")
+    return web.Response(text="🔥 Mac v20.0 - Better then Sodium")
 
 
 async def handle_health(request):
@@ -2386,7 +2482,7 @@ async def run_web_server():
     await runner.setup()
     port = int(os.getenv("PORT", 10000))
     await web.TCPSite(runner, '0.0.0.0', port).start()
-    logger.info(f"🌐 Web server on :{port}")
+    logger.info(f"🌐 Web on :{port}")
 
 
 async def main():
