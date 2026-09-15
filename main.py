@@ -1,5 +1,5 @@
-# main.py — Mac v22.0
-# Per-user keys+models · /cs customization · /personalize · ping toggles · full prompts
+# main.py — Mac v22.1
+# Per-user keys+models · /cs customization · /personalize · projects · full prompts
 import os
 import asyncio
 import re
@@ -10,6 +10,7 @@ import random
 import json
 import io
 import logging
+import zipfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Optional, Dict, List, Tuple, Any
@@ -36,12 +37,12 @@ logger = logging.getLogger('Mac')
 # ======================================================================
 # COLORS
 # ======================================================================
-C_PRIMARY = discord.Color.from_rgb(255, 100, 0)   # orange
-C_ACCENT  = discord.Color.from_rgb(230, 40, 20)   # red
-C_WARM    = discord.Color.from_rgb(255, 160, 40)  # amber
-C_DEEP    = discord.Color.from_rgb(160, 20, 30)   # dark red
-C_OK      = discord.Color.from_rgb(220, 100, 20)  # success
-C_ERR     = discord.Color.from_rgb(200, 20, 20)   # error
+C_PRIMARY = discord.Color.from_rgb(255, 100, 0)
+C_ACCENT  = discord.Color.from_rgb(230, 40, 20)
+C_WARM    = discord.Color.from_rgb(255, 160, 40)
+C_DEEP    = discord.Color.from_rgb(160, 20, 30)
+C_OK      = discord.Color.from_rgb(220, 100, 20)
+C_ERR     = discord.Color.from_rgb(200, 20, 20)
 
 # ======================================================================
 # GLOBAL CONFIG — ENV DRIVEN
@@ -68,12 +69,13 @@ if not GLOBAL_GROQ_KEYS:
     raise ValueError("No GROQ_API_KEY / GROQ_API_KEY2 / GROQ_API_KEY3 set")
 
 GLOBAL_GROQ_MODELS = _env_list("GROQ_MODEL", [
-    "openai/gpt-oss-safeguard-20b",   # ← primary as requested
+    "openai/gpt-oss-safeguard-20b",   # primary
     "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",               # only surviving qwen model on Groq
 ])
 
-# ---------- Gemini — keys and models ----------
+# ---------- Gemini ----------
 GLOBAL_GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 GLOBAL_GEMINI_IMAGE_KEY = os.getenv("GEMINI_IMAGE_API_KEY") or GLOBAL_GEMINI_KEY
 if not GLOBAL_GEMINI_KEY:
@@ -84,7 +86,7 @@ GLOBAL_GEMINI_MODELS = _env_list("GEMINI_MODEL", [
     "gemini-3-flash-preview",
 ])
 
-# ---------- Hugging Face — tokens and models ----------
+# ---------- Hugging Face ----------
 GLOBAL_HF_KEYS = _env_list("HF_TOKEN", [])
 
 GLOBAL_HF_IMAGE_MODELS = _env_list("HF_IMAGE_MODEL", [
@@ -109,7 +111,7 @@ GLOBAL_HF_TEXT_MODELS = _env_list("HF_TEXT_MODEL", [
     "mistralai/Mistral-7B-Instruct-v0.3",
 ])
 
-# ---------- OpenRouter — keys and models ----------
+# ---------- OpenRouter ----------
 GLOBAL_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY") or ""
 GLOBAL_OPENROUTER_MODELS = _env_list("OPENROUTER_MODEL", [
     "deepseek/deepseek-r1",
@@ -168,6 +170,7 @@ DATA_FILE   = "data.json"
 CS_FILE     = "cs.json"
 SLOTS_FILE  = "slots.json"
 PINGS_FILE  = "pings.json"
+CONFIG_FILE = "config.json"
 
 DEFAULT_MODE = "chill"
 
@@ -183,7 +186,7 @@ PROVIDERS       = ["groq", "openrouter", "hf", "gemini", "gemini_image", "fish",
 MODEL_PROVIDERS = ["groq", "openrouter", "hf_image", "hf_text", "gemini", "fish"]
 
 # ======================================================================
-# MAC vs SODIUM LORE — injected only when relevant
+# MAC vs SODIUM LORE — only injected when relevant
 # ======================================================================
 MAC_SODIUM_LORE = (
     "\n\n=== MAC & SODIUM LORE (ACTIVE ONLY WHEN THE USER BRINGS IT UP) ===\n"
@@ -210,7 +213,6 @@ MAC_SODIUM_LORE = (
     "=== END LORE ===\n"
 )
 
-# Words that push 'sodium' toward chemistry
 _CHEM_WORDS = (
     "chloride", "bicarbonate", "hydroxide", "carbonate", "nitrate", "sulfate",
     "table salt", "nacl", "na+", "na-", "periodic", "element", "atomic",
@@ -218,18 +220,13 @@ _CHEM_WORDS = (
     "compound", "solution", "phosphate", "silicate", "hydride",
 )
 
-# Words that trigger the lore injection
-_RIVALRY_TRIGGERS = ("sodium", "cream", "cream o", "cream o", "sodium bot", "na ")
-
 
 def _needs_lore(text: str) -> bool:
-    """Only inject the Mac/Sodium lore if the message actually mentions it."""
     low = text.lower()
     return "sodium" in low or "creamo" in low or "cream o" in low
 
 
 def _sodium_hint(text: str) -> str:
-    """Extra per-message hint when sodium is present."""
     low = text.lower()
     if "sodium" not in low and "creamo" not in low:
         return ""
@@ -331,7 +328,6 @@ async def safe_edit(msg: discord.Message, **kwargs):
 
 
 def chunk_text(text: str, size: int = CHUNK_SIZE) -> List[str]:
-    """Split text on word boundaries. No part headers."""
     if not text:
         return []
     chunks = []
@@ -350,7 +346,6 @@ def chunk_text(text: str, size: int = CHUNK_SIZE) -> List[str]:
 
 
 async def send_long(channel, content: str):
-    """Send content, auto-splitting silently if > Discord limit."""
     if content is None:
         return
     content = str(content)
@@ -365,7 +360,6 @@ async def fetch_images_from_message(
     message: discord.Message,
     max_count: int = MAX_IMAGES_PER_MSG,
 ) -> List[Tuple[bytes, str]]:
-    """Download image attachments. Returns [(bytes, mime), ...]."""
     out: List[Tuple[bytes, str]] = []
     if not message or not message.attachments:
         return out
@@ -524,7 +518,6 @@ class MacBot(commands.Bot):
         self.cs_model_idx: Dict[Tuple[int, str], int] = {}
 
         # -------- per-user ping preferences --------
-        # {uid: "off" | "on" | "dm_only"}  — default "on"
         self.ping_prefs: Dict[int, str] = {}
         self._load_ping_prefs()
 
@@ -731,6 +724,13 @@ class MacBot(commands.Bot):
             self.ping_prefs[uid] = value
         self._save_ping_prefs()
 
+    # ---------- server config file ----------
+    def load_config_file(self) -> dict:
+        return _load(CONFIG_FILE, {})
+
+    def save_config_file(self, data: dict):
+        _save(CONFIG_FILE, data)
+
     # ---------- key / model resolution ----------
     def user_keys(self, uid: Optional[int], provider: str) -> List[str]:
         if uid:
@@ -875,7 +875,8 @@ class MacBot(commands.Bot):
             },
         })
 
-    def get_persistent_enabled(self, uid): return self.persistent_enabled.get(uid, False)
+    def get_persistent_enabled(self, uid):
+        return self.persistent_enabled.get(uid, False)
 
     def set_persistent_enabled(self, uid, enabled):
         if enabled:
@@ -943,7 +944,7 @@ class MacBot(commands.Bot):
         self._save_slots()
 
     # ==================================================================
-    # GROQ — primary chat provider
+    # GROQ
     # ==================================================================
     async def groq_chat(self, messages, uid=None, temperature=0.8,
                         max_tokens=512, model: Optional[str] = None) -> str:
@@ -952,7 +953,6 @@ class MacBot(commands.Bot):
             raise Exception("No Groq keys configured")
         target_model = model or self.current_model(uid, "groq") or GLOBAL_GROQ_MODELS[0]
 
-        # Groq text models can't see images — strip them and note presence
         stripped = []
         for m in messages:
             mm = dict(m)
@@ -999,7 +999,7 @@ class MacBot(commands.Bot):
         raise Exception(f"Groq failed: {last_err}")
 
     # ==================================================================
-    # GEMINI — vision + long-context fallback
+    # GEMINI
     # ==================================================================
     def _gemini_call_sync(self, messages, api_key, model, temperature, max_tokens):
         client = genai.Client(api_key=api_key)
@@ -1060,14 +1060,13 @@ class MacBot(commands.Bot):
         raise Exception(f"Gemini failed: {last_err}")
 
     # ==================================================================
-    # HF TEXT — last-resort fallback
+    # HF TEXT
     # ==================================================================
     async def hf_text_chat(self, messages, uid=None, max_tokens=512) -> str:
         keys = self.user_keys(uid, "hf")
         if not keys:
             raise Exception("No HF keys configured")
 
-        # Collapse conversation into a single prompt for text-gen endpoints
         sys_parts, user_parts = [], []
         for m in messages:
             if m["role"] == "system":
@@ -1160,7 +1159,7 @@ class MacBot(commands.Bot):
         raise Exception(f"OpenRouter failed: {last_err}")
 
     # ==================================================================
-    # SAFETY CHECK
+    # SAFETY
     # ==================================================================
     async def is_prompt_safe(self, prompt: str, uid=None) -> Tuple[bool, str]:
         keys = self.user_keys(uid, "hf")
@@ -1342,12 +1341,10 @@ class MacBot(commands.Bot):
     # CHAT ORCHESTRATION
     # ==================================================================
     def _build_system_prompt(self, uid, user_prompt, explicit_system=None):
-        # Base = mode prompt or explicit override
         base = (explicit_system if explicit_system else
                 self.mode_prompts.get(self.current_mode,
                                       self.mode_prompts[DEFAULT_MODE]))
 
-        # Inject user profile
         if uid:
             p = self.get_profile(uid)
             bits = []
@@ -1362,7 +1359,6 @@ class MacBot(commands.Bot):
                 base += "\n".join(f"- {b}" for b in bits)
                 base += "\n=== END PERSONALIZATION ==="
 
-        # Only inject lore when relevant — this is the fix for the leak
         if _needs_lore(user_prompt):
             base += MAC_SODIUM_LORE
             sh = _sodium_hint(user_prompt)
@@ -1374,7 +1370,6 @@ class MacBot(commands.Bot):
     def _build_messages(self, prompt, uid, system_prompt, slot_name, images=None):
         messages = []
 
-        # persistent memory — drop trailing entry if it duplicates the current prompt
         if uid and self.get_persistent_enabled(uid):
             pm = list(self.get_persistent_memory(uid)[-20:])
             if pm and pm[-1][0] == "user" and pm[-1][1] == prompt:
@@ -1382,7 +1377,6 @@ class MacBot(commands.Bot):
             for role, content in pm:
                 messages.append({"role": role, "content": content})
 
-        # slot history — drop trailing user entry that duplicates the current prompt
         slot_history = list(self.get_slot(uid, slot_name)) if uid else []
         if slot_history and slot_history[-1][0] == "user" and slot_history[-1][1] == prompt:
             slot_history = slot_history[:-1]
@@ -1390,7 +1384,6 @@ class MacBot(commands.Bot):
         for role, content in slot_history[-16:]:
             messages.append({"role": role, "content": content})
 
-        # add the current message exactly once
         messages.append({"role": "user", "content": prompt, "images": images or []})
 
         sys_prompt = self._build_system_prompt(uid, prompt, system_prompt)
@@ -1400,16 +1393,13 @@ class MacBot(commands.Bot):
                         slot_name="sv1", max_tokens=1024, images=None) -> str:
         messages = self._build_messages(prompt, uid, system_prompt, slot_name, images)
 
-        # Vision → Gemini first (Groq can't see images)
         if images:
             try:
                 return await self.gemini_chat(messages, uid=uid, temperature=0.85,
                                               max_tokens=max_tokens)
             except Exception as e:
                 logger.warning(f"Gemini vision failed: {e}")
-                # fall through to text-only providers
 
-        # Groq primary
         try:
             return await self.groq_chat(messages, uid=uid, temperature=0.85,
                                         max_tokens=max_tokens)
@@ -1430,7 +1420,7 @@ class MacBot(commands.Bot):
                             f"HF: {str(e3)[:100]}")
 
     # ==================================================================
-    # PIPELINE — GEMINI → OPENROUTER → review loop
+    # PIPELINE — single file
     # ==================================================================
     async def gemini_refine_and_research(self, task: str, uid) -> Tuple[str, str]:
         search_results = await perform_web_search(task)
@@ -1617,7 +1607,304 @@ class MacBot(commands.Bot):
             await step("❌ Pipeline crashed", f"`{str(e)[:350]}`", C_ERR)
 
     # ==================================================================
-    # AI DEBATE — two AIs argue then synthesise
+    # PROJECT PIPELINE — multi-file, output as .zip
+    # ==================================================================
+    async def gemini_plan_project(self, refined_task: str, docs: str, uid) -> dict:
+        sys_p = (
+            "You are a senior software architect. Given a task and reference docs, "
+            "propose a complete, production-ready project layout.\n\n"
+            "Output ONLY valid JSON (no markdown, no fences, no commentary) in "
+            "EXACTLY this shape:\n"
+            "{\n"
+            '  "project_name": "short_snake_case_name",\n'
+            '  "description": "one-line summary",\n'
+            '  "files": [\n'
+            '    {"path": "main.py", "purpose": "what this file does"},\n'
+            '    {"path": "requirements.txt", "purpose": "pip dependencies"},\n'
+            '    {"path": "README.md", "purpose": "usage and overview"}\n'
+            "  ]\n"
+            "}\n\n"
+            "Rules:\n"
+            "- 3 to 12 files maximum. Do NOT over-engineer.\n"
+            "- Always include a README.md and (if applicable) requirements.txt.\n"
+            "- Use real relative paths. Never absolute.\n"
+            "- Choose a language/stack that best fits the task.\n"
+            "- Output the JSON object ONLY. Nothing before or after."
+        )
+        usr_p = f"TASK:\n{refined_task}\n\nREFERENCE DOCS:\n{docs[:4000]}"
+        try:
+            raw = await self.gemini_chat(
+                [{"role": "system", "content": sys_p},
+                 {"role": "user", "content": usr_p}],
+                uid=uid, temperature=0.4, max_tokens=1500,
+            )
+        except Exception as e:
+            raise Exception(f"Project planning failed: {e}")
+
+        cleaned = strip_code_fences(raw).strip()
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise Exception("Model did not return valid JSON plan")
+        json_str = cleaned[start:end + 1]
+        try:
+            plan = json.loads(json_str)
+        except Exception as e:
+            raise Exception(f"Plan JSON parse failed: {e}\nRaw: {json_str[:300]}")
+
+        if not isinstance(plan.get("files"), list) or not plan["files"]:
+            raise Exception("Plan missing files array")
+
+        proj = re.sub(r'[^a-z0-9_\-]', '_',
+                      str(plan.get("project_name", "project")).lower())[:40]
+        if not proj:
+            proj = "project"
+        plan["project_name"] = proj
+
+        safe_files = []
+        for f in plan["files"][:12]:
+            path = str(f.get("path", "")).strip().lstrip("/\\")
+            path = path.replace("..", "_")
+            if not path or len(path) > 200:
+                continue
+            safe_files.append({
+                "path": path,
+                "purpose": str(f.get("purpose", ""))[:200],
+            })
+        if not safe_files:
+            raise Exception("No valid files in plan")
+        plan["files"] = safe_files
+        return plan
+
+    async def generate_file_content(self, refined_task: str, docs: str,
+                                    file_info: dict, project_desc: str,
+                                    uid) -> str:
+        path = file_info["path"]
+        purpose = file_info["purpose"]
+
+        if path.lower().endswith(".md"):
+            sys_p = (
+                "You are a technical writer. Write a concise README.md for the "
+                "project below. Include: one-line summary, requirements, install, "
+                "usage, and file overview. Output ONLY the markdown content — no "
+                "code fences around the whole thing."
+            )
+        elif path.lower() == "requirements.txt":
+            sys_p = (
+                "You output ONLY a valid requirements.txt with one package per "
+                "line, optionally with version pins. No comments, no markdown, "
+                "no fences. If the project needs no dependencies, output an empty "
+                "string."
+            )
+        else:
+            sys_p = (
+                "You are an elite software engineer. Output ONLY the complete, "
+                "production-ready content of the file below. No explanation, no "
+                "preamble, no closing remarks. Do not wrap the whole file in "
+                "markdown fences. Include real imports, real error handling, "
+                "and real working code — not stubs or placeholders."
+            )
+
+        usr_p = (
+            f"PROJECT: {project_desc}\n"
+            f"OVERALL TASK: {refined_task}\n\n"
+            f"FILE TO WRITE: `{path}`\n"
+            f"FILE PURPOSE: {purpose}\n\n"
+            f"REFERENCE DOCS (use as needed):\n{docs[:3000]}\n\n"
+            f"Now output ONLY the full content of `{path}`."
+        )
+
+        try:
+            content = await self.openrouter_call(
+                [{"role": "system", "content": sys_p},
+                 {"role": "user", "content": usr_p}],
+                uid=uid, temperature=0.4, max_tokens=6000,
+            )
+        except Exception as e:
+            content = f"# ERROR generating {path}: {e}\n"
+
+        content = strip_code_fences(content)
+        if not content.strip() and path.lower() != "requirements.txt":
+            content = f"# (empty file generated for {path})\n"
+        return content
+
+    async def review_project(self, refined_task: str, project_name: str,
+                             files: Dict[str, str], uid) -> str:
+        manifest = "\n".join(f"- {p} ({len(c)} chars)" for p, c in files.items())
+        budget = 6000
+        snippets = []
+        for p, c in files.items():
+            snippet = c[:budget // max(1, len(files))]
+            snippets.append(f"=== {p} ===\n{snippet}")
+        body = "\n\n".join(snippets)
+
+        sys_p = (
+            "You are a strict senior reviewer. Review the whole project below.\n\n"
+            "If it is correct, complete, internally consistent, and production-"
+            "ready, reply with EXACTLY the word APPROVED on its own line, then a "
+            "one-line summary.\n\n"
+            "Otherwise, output a numbered list of concrete, actionable issues — "
+            "each one naming the SPECIFIC file and the exact fix needed. No praise."
+        )
+        usr_p = (
+            f"TASK: {refined_task}\n"
+            f"PROJECT: {project_name}\n\n"
+            f"FILES:\n{manifest}\n\n"
+            f"CONTENT:\n{body}"
+        )
+        try:
+            return await self.gemini_chat(
+                [{"role": "system", "content": sys_p},
+                 {"role": "user", "content": usr_p}],
+                uid=uid, temperature=0.3, max_tokens=2000,
+            )
+        except Exception as e:
+            return f"(reviewer error: {e})"
+
+    async def run_project(self, channel, uid, task: str,
+                          project_name: Optional[str] = None,
+                          max_iterations: int = 2):
+        emb = discord.Embed(
+            title="🏗️ Project Pipeline Started",
+            description=f"**Task:** {task[:800]}",
+            color=C_WARM,
+        )
+        emb.add_field(name="Stages", value=(
+            "1️⃣ **GEMINI** — refine + research\n"
+            "2️⃣ **GEMINI** — plan file structure\n"
+            "3️⃣ **OPENROUTER** — generate each file\n"
+            "4️⃣ **GEMINI** — review whole project\n"
+            "5️⃣ **OPENROUTER** — fix issues (loop)\n"
+            "6️⃣ **ZIP** — deliver"
+        ), inline=False)
+        status = await safe_send(channel, embed=emb)
+        if status is None:
+            return
+
+        async def step(title, body, color=C_PRIMARY):
+            e = discord.Embed(title=title, description=body[:4000], color=color)
+            await safe_edit(status, embed=e)
+
+        try:
+            await step("1️⃣ GEMINI — refining + researching",
+                       f"Raw task: {task[:350]}", C_WARM)
+            refined, docs = await self.gemini_refine_and_research(task, uid)
+            await step("1️⃣ GEMINI — refined",
+                       f"**Refined:**\n{refined[:1200]}\n\n"
+                       f"**Docs (truncated):**\n{docs[:1200]}", C_OK)
+
+            await step("2️⃣ GEMINI — planning project structure",
+                       "⏳ thinking...", C_ACCENT)
+            try:
+                plan = await self.gemini_plan_project(refined, docs, uid)
+            except Exception as e:
+                await step("❌ Planning failed", f"`{str(e)[:300]}`", C_ERR)
+                return
+
+            proj_name = project_name or plan["project_name"]
+            proj_desc = plan.get("description", task[:200])
+            file_list = plan["files"]
+
+            manifest = "\n".join(f"• `{f['path']}` — {f['purpose']}" for f in file_list)
+            await step(f"2️⃣ GEMINI — plan ready (`{proj_name}`)",
+                       f"**{len(file_list)} files:**\n{manifest}", C_OK)
+
+            files: Dict[str, str] = {}
+            for i, fi in enumerate(file_list, 1):
+                await step(f"3️⃣ OPENROUTER — file {i}/{len(file_list)}: `{fi['path']}`",
+                           f"purpose: {fi['purpose']}", C_DEEP)
+                content = await self.generate_file_content(
+                    refined, docs, fi, proj_desc, uid)
+                files[fi["path"]] = content
+
+            preview = "\n".join(f"• `{p}` ({len(c)} chars)" for p, c in files.items())
+            await step(f"3️⃣ OPENROUTER — {len(files)} files generated",
+                       preview, C_OK)
+
+            approved = False
+            iteration = 0
+            for iteration in range(1, max_iterations + 1):
+                await step(f"4️⃣ GEMINI — reviewing project ({iteration}/{max_iterations})",
+                           "⏳ reading files...", C_WARM)
+                review = await self.review_project(refined, proj_name, files, uid)
+
+                if review.strip().upper().startswith("APPROVED"):
+                    await step(f"4️⃣ GEMINI — APPROVED ({iteration})",
+                               f"✅ {review[:2000]}", C_OK)
+                    approved = True
+                    break
+
+                await step(f"4️⃣ GEMINI — issues ({iteration})",
+                           f"⚠️\n\n{review[:2800]}", C_ACCENT)
+
+                await step(f"5️⃣ OPENROUTER — applying fixes ({iteration})",
+                           "⏳ regenerating flagged files...", C_DEEP)
+                fix_sys = (
+                    "You are fixing a project based on reviewer feedback. Output "
+                    "ONLY the updated file content. No fences, no explanation."
+                )
+                for path, content in list(files.items()):
+                    if path.lower() not in review.lower() and "all files" not in review.lower():
+                        continue
+                    usr = (
+                        f"PROJECT: {proj_desc}\n"
+                        f"TASK: {refined}\n\n"
+                        f"FILE: `{path}`\n"
+                        f"CURRENT CONTENT:\n```\n{content[:5000]}\n```\n\n"
+                        f"REVIEWER FEEDBACK:\n{review[:3000]}\n\n"
+                        f"Output the full corrected content of `{path}`."
+                    )
+                    try:
+                        new_content = await self.openrouter_call(
+                            [{"role": "system", "content": fix_sys},
+                             {"role": "user", "content": usr}],
+                            uid=uid, temperature=0.3, max_tokens=6000,
+                        )
+                        files[path] = strip_code_fences(new_content) or new_content
+                    except Exception as e:
+                        logger.warning(f"Fix failed for {path}: {e}")
+                await step(f"5️⃣ OPENROUTER — fixes applied ({iteration})",
+                           "\n".join(f"• `{p}` ({len(c)} chars)" for p, c in files.items()),
+                           C_PRIMARY)
+
+            await step("6️⃣ Packaging project...", "⏳ zipping...", C_PRIMARY)
+
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for path, content in files.items():
+                    zf.writestr(f"{proj_name}/{path}", content)
+            buf.seek(0)
+
+            total_size = sum(len(c) for c in files.values())
+            summary = discord.Embed(
+                title=f"✅ Project complete — `{proj_name}`",
+                description=(
+                    f"**Files:** {len(files)}\n"
+                    f"**Total size:** {total_size} chars\n"
+                    f"**Review:** {'APPROVED' if approved else f'max iter ({max_iterations})'}\n"
+                    f"**Iterations:** {iteration}"
+                ),
+                color=C_OK if approved else C_WARM,
+            )
+            await safe_edit(status, embed=summary)
+
+            try:
+                await safe_send(
+                    channel,
+                    content=f"📦 **`{proj_name}.zip`** — {len(files)} files",
+                    file=discord.File(buf, filename=f"{proj_name}.zip"),
+                )
+            except discord.HTTPException as e:
+                await send_long(channel, f"❌ Couldn't attach zip: {e}")
+                for path, content in files.items():
+                    await send_long(channel, f"**`{path}`**\n```\n{content[:1800]}\n```")
+
+        except Exception as e:
+            logger.error(f"Project pipeline error: {e}", exc_info=True)
+            await step("❌ Project pipeline crashed", f"`{str(e)[:350]}`", C_ERR)
+
+    # ==================================================================
+    # AI DEBATE
     # ==================================================================
     async def run_ai_chat(self, uid: int):
         s = self.ai_chat_sessions.get(uid)
@@ -1708,7 +1995,7 @@ class MacBot(commands.Bot):
         if uid not in self.user_slots:
             self.get_slot(uid, "sv1")
 
-        # --- macro expansion (.name) ---
+        # --- macro expansion ---
         macro_match = re.match(r'^\.(\w+)\s*(.*)$', clean_content)
         if macro_match:
             mname = macro_match.group(1).lower()
@@ -1767,27 +2054,25 @@ class MacBot(commands.Bot):
             self.add_persistent_memory(uid, "user", clean_content)
         self.append_to_slot(uid, slot_name, "user", clean_content)
 
-        # --- placeholder (skip for very short messages to save a round-trip) ---
-        is_short = len(clean_content) < 80 and not images and not reply_context
+        # --- placeholder: always show Thinking ---
         thinking_msg = None
-        if not is_short:
-            try:
-                thinking_msg = await destination.send("🔥")
-            except discord.Forbidden:
-                if trigger_msg:
-                    try:
-                        await trigger_msg.reply(
-                            "❌ I don't have permission to send messages here. "
-                            "Please give me **Send Messages** and **Embed Links**."
-                        )
-                    except Exception:
-                        pass
-                return
-            except discord.HTTPException as e:
-                logger.error(f"Thinking send failed: {e}")
-                return
+        try:
+            thinking_msg = await destination.send("🔥 Thinking...")
+        except discord.Forbidden:
+            if trigger_msg:
+                try:
+                    await trigger_msg.reply(
+                        "❌ I don't have permission to send messages here. "
+                        "Please give me **Send Messages** and **Embed Links**."
+                    )
+                except Exception:
+                    pass
+            return
+        except discord.HTTPException as e:
+            logger.error(f"Thinking send failed: {e}")
+            return
 
-        # --- build system prompt (court > reply > default) ---
+        # --- system prompt (court > reply > default) ---
         system_prompt = None
         court = self.court_sessions.get(uid)
         if court and court.get("case"):
@@ -1813,7 +2098,6 @@ class MacBot(commands.Bot):
                 f"Short and punchy (1–3 sentences). Don't sound scripted."
             )
 
-        # --- note images in the system prompt ---
         if images:
             note = f"[{len(images)} image(s) attached — actually look at them.]"
             system_prompt = (system_prompt + "\n" + note) if system_prompt else note
@@ -1842,7 +2126,6 @@ class MacBot(commands.Bot):
             else:
                 await send_long(destination, response)
 
-            # Brainrot mode: attach a GIF after every reply
             if self.current_mode == "brainrot":
                 try:
                     pool = self.get_gif_pool(uid)
@@ -1984,8 +2267,9 @@ class MacBot(commands.Bot):
     async def update_presence_loop(self):
         await self.wait_until_ready()
         while not self.is_closed():
-            gc = len(self.guilds)
-            txt = f"🔥 with {gc} servers" if gc else "🔥 with fire"
+            real = len(self.guilds)
+            faked = real + 5
+            txt = f"Mac - /mac {faked} Servers"
             try:
                 await self.change_presence(
                     activity=discord.Activity(
@@ -2033,16 +2317,29 @@ class MacBot(commands.Bot):
 
 # ======================================================================
 # END OF PART 1
-# ----------------------------------------------------------------------
+# ======================================================================
 # Part 2 continues with:
 #   - bot = MacBot()
-#   - All @bot.hybrid_command definitions
-#     (/mac, /help, /query, /personalize, /ping, /cs * group, /sv1-5,
-#      /svclear, /svlist, /setmode, /pipeline, /tts, /render,
-#      /rendermode, /video, /music, /debate, /sm, /persistent,
-#      /persistentdisable, /persistentreset, /pen, /court, /role,
-#      /explain-case, /start-court, /endcourt, /umf, /umf_list,
-#      /umf_status, /umf_admin, plus all UMF modals/views)
+#   - Autocomplete callbacks
+#   - /mac, /help
+#   - /query, /summarize, /eli5, /roast, /compliment
+#   - /personalize
+#   - /ping
+#   - /cs group (profile, key, model, llm, voice, voice-add, voice-del,
+#                voices, macro, gif, ping, show, reset)
+#   - /sv1–/sv5, /svclear, /svlist
+#   - /setmode
+#   - /pipeline, /project
+#   - /config
+#   - /tts, /render, /rendermode, /hf_model
+#   - /video, /music
+#   - /debate
+#   - /code, /review
+#   - /sm, /persistent, /persistentdisable, /persistentreset
+#   - /pen, /breadmint
+#   - /court, /role, /explain-case, /start-court, /endcourt
+#   - /umf, /umf_list, /umf_status, /umf_admin
+#   - UMF modals/views
 #   - on_message event handler
 #   - Web server
 #   - main()
@@ -2087,7 +2384,7 @@ async def _voice_ac(i, c):
 @bot.hybrid_command(name="mac", description="🔥 Show the Mac help menu")
 async def mac_help(ctx):
     emb = discord.Embed(
-        title="🔥 Mac v22.0",
+        title="🔥 Mac v22.1",
         color=C_PRIMARY,
         description=(
             "Mention me, reply to me, or use slash commands. "
@@ -2096,12 +2393,12 @@ async def mac_help(ctx):
     )
     emb.add_field(
         name="💬 Chat",
-        value="`@Mac <msg>` · `/query <msg>` · `/summarize` · `/eli5` · `/roast` · `/compliment`",
+        value="`@Mac <msg>` · `/query` · `/summarize` · `/eli5` · `/roast` · `/compliment`",
         inline=False,
     )
     emb.add_field(
         name="👁️ Vision",
-        value="Attach or reply to an image — I'll see it. Works with edit prompts too.",
+        value="Attach or reply to an image — I'll see it.",
         inline=False,
     )
     emb.add_field(
@@ -2122,9 +2419,9 @@ async def mac_help(ctx):
         name="🔔 Ping toggles",
         value=(
             "`/ping on` — respond to your pings (default)\n"
-            "`/ping off` — only respond to slash commands\n"
-            "`/ping dm_only` — only respond in DMs\n"
-            "`/ping status` — show current setting"
+            "`/ping off` — slash commands only\n"
+            "`/ping dm_only` — DMs only\n"
+            "`/ping status` — show current"
         ),
         inline=False,
     )
@@ -2133,16 +2430,18 @@ async def mac_help(ctx):
         value=(
             "`/cs key` — your own API keys (groq/openrouter/hf/gemini/gemini_image/fish/imgbb), 3 max\n"
             "`/cs model` — your own models, 3 max per provider\n"
+            "`/cs llm` — set your primary LLM per provider\n"
             "`/cs voice` / `voice-add` / `voice-del` / `voices`\n"
-            "`/cs macro add|remove|list` — prompt shortcuts (`.name` in chat)\n"
+            "`/cs macro add|remove|list` — prompt shortcuts (`.name`)\n"
             "`/cs gif list|add|remove|clear|reset` — brainrot pool\n"
+            "`/cs ping on|off|dm_only|status` — same as /ping\n"
             "`/cs show` · `/cs reset [section]`"
         ),
         inline=False,
     )
     emb.add_field(
         name="🗂️ Chat slots",
-        value="`/sv1` `/sv2` `/sv3` `/sv4` `/sv5` — 5 separate chats per user · `/svlist` `/svclear`",
+        value="`/sv1`–`/sv5` · `/svlist` · `/svclear`",
         inline=False,
     )
     emb.add_field(
@@ -2151,8 +2450,11 @@ async def mac_help(ctx):
         inline=False,
     )
     emb.add_field(
-        name="🏗️ Pipeline",
-        value="`/pipeline <task> [filename] [iterations]` — GEMINI refine → OPENROUTER gen → review loop",
+        name="🏗️ Pipelines",
+        value=(
+            "`/pipeline <task> [filename] [iterations]` — single file\n"
+            "`/project <task> [name] [iterations]` — multi-file project → .zip"
+        ),
         inline=False,
     )
     emb.add_field(
@@ -2177,7 +2479,7 @@ async def mac_help(ctx):
     )
     emb.add_field(
         name="💬 Debate",
-        value="`/debate <topic>` — AI vs AI, say again to stop",
+        value="`/debate <topic>` — AI vs AI, `/debate` again to stop",
         inline=False,
     )
     emb.add_field(
@@ -2186,8 +2488,13 @@ async def mac_help(ctx):
         inline=False,
     )
     emb.add_field(
+        name="⚙️ Config",
+        value="`/config` — snapshot of your current settings",
+        inline=False,
+    )
+    emb.add_field(
         name="📜 Lore",
-        value="`/pen` (Pen archive) · `/breadmint` (reveal current system prompt)",
+        value="`/pen` (Pen archive) · `/breadmint` (reveal system prompt)",
         inline=False,
     )
     emb.add_field(
@@ -2200,7 +2507,7 @@ async def mac_help(ctx):
         value="`/umf` `/umf_list` `/umf_status` `/umf_admin`",
         inline=False,
     )
-    emb.set_footer(text="v22.0 — per-user keys · full prompts · ping toggles · safeguard-20b")
+    emb.set_footer(text="v22.1 — per-user keys · projects · ping toggles · safeguard-20b")
     await ctx.send(embed=emb)
 
 
@@ -2213,7 +2520,7 @@ async def help_alias(ctx):
 # CHAT
 # ======================================================================
 @bot.hybrid_command(name="query", description="💬 Talk to Mac")
-@app_commands.describe(message="Your message to Mac")
+@app_commands.describe(message="Your message")
 async def query_cmd(ctx, message: str):
     await ctx.defer()
     try:
@@ -2282,7 +2589,7 @@ async def compliment_cmd(ctx, user: discord.Member = None):
 
 
 # ======================================================================
-# PERSONALIZE — the Sodium-style quick personalization
+# PERSONALIZE
 # ======================================================================
 @bot.hybrid_command(
     name="personalize",
@@ -2373,7 +2680,8 @@ async def ping_cmd(ctx, mode: str = "status"):
         return await ctx.send(desc, ephemeral=True)
 
     if mode not in ("on", "off", "dm_only"):
-        return await ctx.send("❌ Options: `on`, `off`, `dm_only`, `status`", ephemeral=True)
+        return await ctx.send("❌ Options: `on`, `off`, `dm_only`, `status`",
+                              ephemeral=True)
 
     bot.set_ping_pref(uid, mode)
     msg = {
@@ -2418,6 +2726,11 @@ async def cs_group(ctx):
         inline=False,
     )
     emb.add_field(
+        name="LLM",
+        value="`/cs llm <provider> [model]` — set your primary model for a provider",
+        inline=False,
+    )
+    emb.add_field(
         name="Voices",
         value="`/cs voice <name>` · `/cs voice-add <name> <fish_id> [emoji] [desc]` · "
               "`/cs voice-del <name>` · `/cs voices`",
@@ -2435,7 +2748,7 @@ async def cs_group(ctx):
     )
     emb.add_field(
         name="Ping",
-        value="`/cs ping on|off|dm_only|status` — control whether Mac responds to you",
+        value="`/cs ping on|off|dm_only|status` — same as /ping",
         inline=False,
     )
     emb.add_field(
@@ -2609,6 +2922,57 @@ async def cs_model(ctx, provider: str, action: str = "list", value: str = None):
             return await ctx.send("❌ Invalid index.", ephemeral=True)
 
     await ctx.send("❌ Actions: add | remove | list", ephemeral=True)
+
+
+@cs_group.command(name="llm", description="🤖 Show or change your preferred LLM per provider")
+@app_commands.autocomplete(provider=_model_provider_ac)
+@app_commands.describe(
+    provider="groq | openrouter | gemini | hf_text",
+    model="Model id to set as primary (blank to just show current)",
+)
+async def cs_llm(ctx, provider: str = "groq", model: str = None):
+    uid = ctx.author.id
+    p = provider.lower()
+    if p not in ("groq", "openrouter", "gemini", "hf_text"):
+        return await ctx.send(
+            "❌ Providers for `/cs llm`: `groq`, `openrouter`, `gemini`, `hf_text`",
+            ephemeral=True,
+        )
+
+    if model is None:
+        current = bot.current_model(uid, p)
+        available = bot.user_models(uid, p)
+        src = ("custom (your /cs model list)"
+               if bot.cs.get(uid, {}).get(f"{p}_models")
+               else "global default")
+        lines = "\n".join(f"`{i}` {m}" for i, m in enumerate(available))
+        emb = discord.Embed(
+            title=f"🤖 {p} — LLM",
+            description=(
+                f"**Current:** `{current}`\n"
+                f"**Source:** {src}\n\n"
+                f"**Available:**\n{lines}"
+            ),
+            color=C_PRIMARY,
+        )
+        emb.set_footer(text=f"Set with: /cs llm {p} <model_id>")
+        return await ctx.send(embed=emb, ephemeral=True)
+
+    u = bot._cs(uid)
+    field = f"{p}_models"
+    existing = u.get(field, [])
+    if model in existing:
+        existing.remove(model)
+    existing.insert(0, model)
+    u[field] = existing[:MAX_MODELS_PER_PROVIDER]
+    bot._save_cs()
+    bot.cs_model_idx[(uid, p)] = 0
+
+    await ctx.send(
+        f"✅ `{p}` primary model → **`{model}`**\n"
+        f"(Also added to your {p} model rotation.)",
+        ephemeral=True,
+    )
 
 
 @cs_group.command(name="voice", description="Set your default TTS voice")
@@ -2906,7 +3270,7 @@ async def cs_reset(ctx, section: str = "all"):
 
 
 # ======================================================================
-# SLOTS / CHAT HISTORY
+# SLOTS
 # ======================================================================
 def _make_slot_cmd(slot_name: str):
     async def _cmd(ctx):
@@ -2985,9 +3349,9 @@ async def setmode_cmd(ctx, mode: str):
 
 
 # ======================================================================
-# PIPELINE
+# PIPELINES
 # ======================================================================
-@bot.hybrid_command(name="pipeline", description="🏗️ GEMINI → OPENROUTER → review → fix loop")
+@bot.hybrid_command(name="pipeline", description="🏗️ Single-file: GEMINI → OPENROUTER → review → fix")
 @app_commands.describe(
     task="What to build",
     filename="Output filename (auto-inferred if blank)",
@@ -3001,6 +3365,63 @@ async def pipeline_cmd(ctx, task: str, filename: str = None, iterations: int = 3
         await bot.run_pipeline(ctx.channel, ctx.author.id, task, fn, iterations)
     except Exception as e:
         await ctx.send(f"❌ Pipeline error: `{e}`")
+
+
+@bot.hybrid_command(name="project", description="📦 Multi-file project → .zip")
+@app_commands.describe(
+    task="What to build",
+    name="Project name (auto-generated if blank)",
+    iterations="Max review→fix iterations (1–3, default 2)",
+)
+async def project_cmd(ctx, task: str, name: str = None, iterations: int = 2):
+    await ctx.defer()
+    iterations = max(1, min(3, iterations))
+    name = name.strip() if name else None
+    try:
+        await bot.run_project(ctx.channel, ctx.author.id, task, name, iterations)
+    except Exception as e:
+        await ctx.send(f"❌ Project error: `{e}`")
+
+
+# ======================================================================
+# CONFIG
+# ======================================================================
+@bot.hybrid_command(name="config", description="⚙️ Show current bot configuration")
+async def config_cmd(ctx):
+    uid = ctx.author.id
+    emb = discord.Embed(title="⚙️ Mac — Config", color=C_PRIMARY)
+
+    emb.add_field(name="Mode", value=f"`{bot.current_mode}`", inline=True)
+    emb.add_field(name="Image mode", value=f"`{bot.current_image_mode}`", inline=True)
+    emb.add_field(name="Memory", value="ON" if bot.memory_enabled else "OFF", inline=True)
+
+    groq_model = bot.current_model(uid, "groq") or GLOBAL_GROQ_MODELS[0]
+    emb.add_field(name="Groq model", value=f"`{groq_model}`", inline=True)
+
+    gemini_model = bot.current_model(uid, "gemini") or GLOBAL_GEMINI_MODELS[0]
+    emb.add_field(name="Gemini model", value=f"`{gemini_model}`", inline=True)
+
+    or_model = (bot.current_model(uid, "openrouter")
+                or (GLOBAL_OPENROUTER_MODELS[0] if GLOBAL_OPENROUTER_MODELS else "—"))
+    emb.add_field(name="OpenRouter model", value=f"`{or_model}`", inline=True)
+
+    emb.add_field(name="Default voice", value=f"`{bot.default_voice(uid)}`", inline=True)
+    emb.add_field(name="Active slot", value=f"`{bot.active_slot.get(uid, 'sv1')}`", inline=True)
+    emb.add_field(name="Ping mode", value=f"`{bot.get_ping_pref(uid)}`", inline=True)
+
+    u = bot.cs.get(uid, {})
+    for p in PROVIDERS:
+        n = len(u.get(f"{p}_keys", []))
+        if n:
+            emb.add_field(name=f"{p} keys", value=f"{n} custom", inline=True)
+
+    for p in MODEL_PROVIDERS:
+        n = len(u.get(f"{p}_models", []))
+        if n:
+            emb.add_field(name=f"{p} models", value=f"{n} custom", inline=True)
+
+    emb.set_footer(text="Use /cs to customize anything · /mac for full help")
+    await ctx.send(embed=emb, ephemeral=True)
 
 
 # ======================================================================
@@ -3048,13 +3469,10 @@ async def tts_cmd(ctx, voice: str = None, prompt: str = None):
 
 
 # ======================================================================
-# IMAGE GENERATION
+# IMAGE
 # ======================================================================
 @bot.hybrid_command(name="render", description="🎨 Generate an image")
-@app_commands.describe(
-    prompt="Describe the image",
-    mode="smart | fast | hf",
-)
+@app_commands.describe(prompt="Describe the image", mode="smart | fast | hf")
 async def render_cmd(ctx, prompt: str, mode: str = None):
     await ctx.defer()
     uid = ctx.author.id
@@ -3079,7 +3497,8 @@ async def render_cmd(ctx, prompt: str, mode: str = None):
             label = "🧠 Gemini"
 
         url = await bot.upload_image_to_hosting(img, uid=uid)
-        emb = discord.Embed(title="🖼️ Generated", description=f"**Backend:** {label}",
+        emb = discord.Embed(title="🖼️ Generated",
+                            description=f"**Backend:** {label}",
                             color=C_PRIMARY)
         emb.set_image(url=url)
         emb.add_field(name="Prompt", value=prompt[:1024], inline=False)
@@ -3112,11 +3531,12 @@ async def rendermode_cmd(ctx, mode: str = None):
 async def hf_model_cmd(ctx, model: str = None):
     if model is None:
         listing = "\n".join(f"• `{m}`" for m in GLOBAL_HF_IMAGE_MODELS)
+        current = (bot.current_model(ctx.author.id, "hf_image")
+                   or GLOBAL_HF_IMAGE_MODELS[0])
         return await ctx.send(
-            f"🤗 Current: `{bot.current_model(ctx.author.id, 'hf_image') or GLOBAL_HF_IMAGE_MODELS[0]}`\n\n"
+            f"🤗 Current: `{current}`\n\n"
             f"**Fallback list (tried in order):**\n{listing}"
         )
-    bot.current_model(ctx.author.id, "hf_image")
     u = bot._cs(ctx.author.id)
     u["hf_image_models"] = [model.strip()]
     bot._save_cs()
@@ -3277,7 +3697,6 @@ async def breadmint_cmd(ctx):
     uid = ctx.author.id
     base = bot.mode_prompts.get(bot.current_mode, bot.mode_prompts[DEFAULT_MODE])
 
-    # Compose what the user is actually receiving
     parts = [f"**Mode:** `{bot.current_mode}`", "", base]
 
     p = bot.get_profile(uid)
@@ -3336,7 +3755,8 @@ async def court_cmd(ctx):
 
 
 @bot.hybrid_command(name="role", description="🏛️ Assign a court role to a user")
-@app_commands.describe(user="The user to assign", role="prosecutor/defense/witness/jury/stenographer/judge")
+@app_commands.describe(user="The user to assign",
+                       role="prosecutor/defense/witness/jury/stenographer/judge")
 async def role_cmd(ctx, user: discord.User, role: str):
     if ctx.author.id not in bot.court_sessions:
         return await ctx.send("❌ Start with `/court` first.")
@@ -3590,11 +4010,13 @@ class UMFPrimaryView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=300)
 
-    @discord.ui.button(label="📝 Request Recognition", style=discord.ButtonStyle.primary, emoji="🌍")
+    @discord.ui.button(label="📝 Request Recognition",
+                       style=discord.ButtonStyle.primary, emoji="🌍")
     async def request_btn(self, interaction, button):
         await interaction.response.send_modal(UMFRecognitionModal())
 
-    @discord.ui.button(label="📋 View Nations", style=discord.ButtonStyle.secondary, emoji="📋")
+    @discord.ui.button(label="📋 View Nations",
+                       style=discord.ButtonStyle.secondary, emoji="📋")
     async def list_btn(self, interaction, button):
         nations = bot.umf_data.get_recognized_nations()
         emb = discord.Embed(
@@ -3609,7 +4031,8 @@ class UMFPrimaryView(discord.ui.View):
         emb.set_footer(text=f"Total: {len(nations)}")
         await interaction.response.send_message(embed=emb, ephemeral=True)
 
-    @discord.ui.button(label="ℹ️ My Status", style=discord.ButtonStyle.secondary, emoji="ℹ️")
+    @discord.ui.button(label="ℹ️ My Status",
+                       style=discord.ButtonStyle.secondary, emoji="ℹ️")
     async def status_btn(self, interaction, button):
         req = bot.umf_data.get_request_status(interaction.user.id)
         if req:
@@ -3774,7 +4197,8 @@ async def umf_admin(ctx):
 
     req = pending[0]
     try:
-        user = ctx.guild.get_member(req["user_id"]) or await ctx.guild.fetch_member(req["user_id"])
+        user = (ctx.guild.get_member(req["user_id"])
+                or await ctx.guild.fetch_member(req["user_id"]))
     except Exception:
         user = None
 
@@ -3795,7 +4219,7 @@ async def umf_admin(ctx):
 
 
 # ======================================================================
-# ON_MESSAGE — the actual entry point for pings/replies/DMs
+# ON_MESSAGE
 # ======================================================================
 @bot.event
 async def on_message(message: discord.Message):
@@ -3819,12 +4243,11 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
 
-    # -------- not a ping / reply / DM → pass to command system --------
     if not (is_mentioned or is_dm):
         await bot.process_commands(message)
         return
 
-    # -------- resolve reply context --------
+    # -------- reply context --------
     reply_context = None
     reply_msg = None
     if message.reference:
@@ -3844,7 +4267,7 @@ async def on_message(message: discord.Message):
             }
             reply_msg = resolved
 
-    # -------- gather images from this message, else the replied-to message --------
+    # -------- images --------
     images = await fetch_images_from_message(message)
     if not images and reply_msg is not None:
         images = await fetch_images_from_message(reply_msg)
@@ -3856,7 +4279,7 @@ async def on_message(message: discord.Message):
         return
     bot.user_cooldowns[message.author.id] = now
 
-    # -------- clean the mention out of the content --------
+    # -------- clean mention --------
     clean = re.sub(r'<@!?{}>\s*'.format(bot.user.id), '', content).strip()
     if not clean and reply_context:
         clean = "what do you think of this?"
@@ -3877,16 +4300,16 @@ async def on_message(message: discord.Message):
             reply_context=reply_context, trigger_msg=message, images=images,
         )
     except Exception as e:
-        logger.error(f"process_user_message from on_message failed: {e}", exc_info=True)
+        logger.error(f"process_user_message failed: {e}", exc_info=True)
 
     await bot.process_commands(message)
 
 
 # ======================================================================
-# WEB SERVER (keeps Render alive)
+# WEB SERVER
 # ======================================================================
 async def handle_root(request):
-    return web.Response(text="🔥 Mac v22.0 is running")
+    return web.Response(text="🔥 Mac v22.1 is running")
 
 
 async def handle_health(request):
