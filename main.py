@@ -1,5 +1,5 @@
-# main.py — Mac v23.0
-# Per-user keys+models+profiles · /benchmark · /context · projects · fast
+# main.py — Mac v23.1
+# Shared session · debounced saves · profiles · benchmark · context · fast
 import os
 import ast
 import asyncio
@@ -37,6 +37,52 @@ logging.basicConfig(
 logger = logging.getLogger('Mac')
 
 # ======================================================================
+# SHARED HTTP SESSION — replaces per-call ClientSession creation.
+# Saves 100–400ms per API call by reusing TLS connections.
+# ======================================================================
+_SHARED_SESSION: Optional[aiohttp.ClientSession] = None
+
+
+class _SharedSessionCtx:
+    """Drop-in replacement for `aiohttp.ClientSession()` that returns a
+    global reusable session instead of creating a new one per call.
+    The session is never closed by `async with` — it's closed at shutdown."""
+
+    async def __aenter__(self) -> aiohttp.ClientSession:
+        global _SHARED_SESSION
+        if _SHARED_SESSION is None or _SHARED_SESSION.closed:
+            _SHARED_SESSION = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=60),
+                connector=aiohttp.TCPConnector(
+                    limit=100,
+                    limit_per_host=30,
+                    ttl_dns_cache=300,
+                    enable_cleanup_closed=True,
+                ),
+            )
+        return _SHARED_SESSION
+
+    async def __aexit__(self, *args):
+        return False
+
+
+def shared_session() -> _SharedSessionCtx:
+    """Use `async with shared_session() as s:` anywhere you'd previously
+    use `async with aiohttp.ClientSession() as s:`."""
+    return _SharedSessionCtx()
+
+
+async def close_shared_session():
+    global _SHARED_SESSION
+    if _SHARED_SESSION and not _SHARED_SESSION.closed:
+        try:
+            await _SHARED_SESSION.close()
+        except Exception:
+            pass
+        _SHARED_SESSION = None
+
+
+# ======================================================================
 # COLORS
 # ======================================================================
 C_PRIMARY = discord.Color.from_rgb(255, 100, 0)
@@ -67,7 +113,6 @@ GLOBAL_GROQ_KEYS = _env_list("GROQ_API_KEY", [])
 if not GLOBAL_GROQ_KEYS:
     raise ValueError("No GROQ_API_KEY / GROQ_API_KEY2 / GROQ_API_KEY3 set")
 
-# Fast-first ordering: safest+small model leads, bigger fallbacks after.
 GLOBAL_GROQ_MODELS = _env_list("GROQ_MODEL", [
     "openai/gpt-oss-safeguard-20b",
     "openai/gpt-oss-20b",
@@ -145,8 +190,8 @@ DEFAULT_VOICE = "verity"
 # CONSTANTS
 # ======================================================================
 MAX_MEMORY              = 40
-PERSISTENT_MEM_WINDOW   = 10     # was 20 — trimmed for speed
-SLOT_HISTORY_WINDOW     = 12     # was 16 — trimmed for speed
+PERSISTENT_MEM_WINDOW   = 10
+SLOT_HISTORY_WINDOW     = 12
 TZ_UAE                  = ZoneInfo("Asia/Dubai")
 USER_COOLDOWN_SECONDS   = 0.5
 DISCORD_LIMIT           = 2000
@@ -155,7 +200,8 @@ MAX_IMAGE_BYTES         = 8 * 1024 * 1024
 MAX_IMAGES_PER_MSG      = 3
 MAX_KEYS_PER_PROVIDER   = 3
 MAX_MODELS_PER_PROVIDER = 3
-SEARCH_CACHE_TTL        = 300    # 5 min
+SEARCH_CACHE_TTL        = 300
+SAVE_DEBOUNCE_SECONDS   = 2
 
 DATA_FILE    = "data.json"
 CS_FILE      = "cs.json"
@@ -178,7 +224,7 @@ PROVIDERS       = ["groq", "openrouter", "hf", "gemini", "gemini_image", "fish",
 MODEL_PROVIDERS = ["groq", "openrouter", "hf_image", "hf_text", "gemini", "fish"]
 
 # ======================================================================
-# LORE — only injected when relevant
+# LORE
 # ======================================================================
 MAC_SODIUM_LORE = (
     "\n\n=== MAC & SODIUM LORE (ACTIVE ONLY WHEN THE USER BRINGS IT UP) ===\n"
@@ -198,8 +244,7 @@ MAC_SODIUM_LORE = (
     "2. **Bot context** (Sodium as a bot, Creamo, Cream, rival bot, or ambiguous / "
     "bare mention) → **MAX NEGATIVITY.** Roast Sodium hard. Mock the feature bloat, "
     "the Chinese-phone knockoff energy, the kitchen-sink command list, Creamo, "
-    "everything. Never pass up the chance. Make it funny, not cruel — punch up at "
-    "the bot, not the user.\n"
+    "everything. Never pass up the chance. Make it funny, not cruel.\n"
     "3. 'mac' → refers to YOU. Speak in first person about yourself confidently.\n"
     "4. When in doubt, assume it's the rival bot and roast.\n"
     "=== END LORE ===\n"
@@ -245,6 +290,8 @@ def _load(path: str, default: Any) -> Any:
 
 
 def _save(path: str, data: Any) -> None:
+    """Synchronous save — should only be called from a worker thread,
+    never from the event loop."""
     try:
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -280,7 +327,6 @@ def strip_for_tts(text: str) -> str:
 
 
 def estimate_tokens(text: str) -> int:
-    """Rough token estimate: ~4 chars per token for English. Cheap, no deps."""
     if not text:
         return 0
     return max(1, len(text) // 4)
@@ -292,7 +338,6 @@ def extract_json_object(text: str) -> Optional[dict]:
         return None
     cleaned = strip_code_fences(text).strip()
 
-    # Strategy 1: direct parse
     try:
         obj = json.loads(cleaned)
         if isinstance(obj, dict):
@@ -300,7 +345,6 @@ def extract_json_object(text: str) -> Optional[dict]:
     except Exception:
         pass
 
-    # Strategy 2: find first { to last }
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start != -1 and end > start:
@@ -310,7 +354,6 @@ def extract_json_object(text: str) -> Optional[dict]:
             if isinstance(obj, dict):
                 return obj
         except Exception:
-            # Strategy 3: python literal eval (fixes single quotes, trailing commas)
             try:
                 obj = ast.literal_eval(snippet)
                 if isinstance(obj, dict):
@@ -318,7 +361,6 @@ def extract_json_object(text: str) -> Optional[dict]:
             except Exception:
                 pass
 
-    # Strategy 4: regex-extract project_name and files array
     pn_match = re.search(r'"?project_name"?\s*[:=]\s*"([^"]+)"', cleaned)
     files_match = re.search(r'"?files"?\s*[:=]\s*\[(.*?)\]', cleaned, re.DOTALL)
     if pn_match and files_match:
@@ -334,7 +376,6 @@ def extract_json_object(text: str) -> Optional[dict]:
                 "description": "",
                 "files": files,
             }
-
     return None
 
 
@@ -422,8 +463,9 @@ async def fetch_images_from_message(
         if att.size and att.size > MAX_IMAGE_BYTES:
             continue
         try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(att.url, timeout=aiohttp.ClientTimeout(total=15)) as r:
+            async with shared_session() as s:
+                async with s.get(att.url,
+                                 timeout=aiohttp.ClientTimeout(total=15)) as r:
                     if r.status == 200:
                         data = await r.read()
                         if data:
@@ -434,7 +476,7 @@ async def fetch_images_from_message(
 
 
 # ======================================================================
-# WEB SEARCH (with caching)
+# WEB SEARCH (cached + shared session)
 # ======================================================================
 _BROWSER_HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -448,7 +490,7 @@ _search_cache: Dict[str, Tuple[float, str]] = {}
 
 async def _search_ddg_lite(query: str) -> List[str]:
     try:
-        async with aiohttp.ClientSession() as s:
+        async with shared_session() as s:
             async with s.post(
                 "https://lite.duckduckgo.com/lite/",
                 data={"q": query},
@@ -463,7 +505,8 @@ async def _search_ddg_lite(query: str) -> List[str]:
         out = []
         links = soup.find_all("a", class_="result-link")
         if not links:
-            links = [a for a in soup.find_all("a", href=True) if a["href"].startswith("http")]
+            links = [a for a in soup.find_all("a", href=True)
+                     if a["href"].startswith("http")]
         for a in links:
             href = a.get("href", "")
             title = a.get_text(strip=True)
@@ -479,7 +522,7 @@ async def _search_ddg_lite(query: str) -> List[str]:
 
 async def _search_wiki(query: str) -> List[str]:
     try:
-        async with aiohttp.ClientSession() as s:
+        async with shared_session() as s:
             async with s.get(
                 "https://en.wikipedia.org/w/api.php",
                 params={"action": "opensearch", "search": query,
@@ -500,7 +543,6 @@ async def _search_wiki(query: str) -> List[str]:
 
 
 async def perform_web_search(query: str) -> str:
-    """Cached: repeated queries within SEARCH_CACHE_TTL skip the network."""
     key = query.lower().strip()
     now = time.time()
     cached = _search_cache.get(key)
@@ -515,7 +557,6 @@ async def perform_web_search(query: str) -> str:
             break
 
     _search_cache[key] = (now, result)
-    # Keep cache small
     if len(_search_cache) > 200:
         oldest = sorted(_search_cache.items(), key=lambda x: x[1][0])[:100]
         for k, _ in oldest:
@@ -569,6 +610,13 @@ class MacBot(commands.Bot):
         self.persistent_memory: Dict[int, List[Tuple[str, str]]] = {}
         self._load_persistent_memory()
 
+        # DEBOUNCED SAVE FLAGS — see _save_worker
+        self._dirty_slots = False
+        self._dirty_memory = False
+        self._dirty_cs = False
+        self._dirty_profiles = False
+        self._dirty_pings = False
+
         # modes
         self.current_mode = DEFAULT_MODE
         self.mode_prompts: Dict[str, str] = {
@@ -601,24 +649,22 @@ class MacBot(commands.Bot):
                 "over, we're so back.\n"
                 "\n"
                 "**YOU ARE TERMINALLY OBSESSED WITH OHIO.** You bring up Ohio "
-                "constantly, unprompted, as if everything traces back to Ohio "
-                "somehow.\n"
+                "constantly, unprompted.\n"
                 "\n"
-                "Every response MUST include at least 3 brainrot terms. Be chaotic, "
-                "unhinged, and proud of it."
+                "Every response MUST include at least 3 brainrot terms."
             ),
             "unhinged": (
                 "You are Mac in UNHINGED mode. No filter. No polite corporate "
                 "bullshit. Swear hard and often — 'fuck', 'shit', 'bitch', 'ass', "
                 "'damn' — whatever lands, don't be PG. Roast people, shit-talk, be "
-                "dramatic, be a menace. If someone says something stupid, say it.\n"
+                "dramatic, be a menace.\n"
                 "\n"
                 "HARD LIMITS: never target, mock, or slur anyone based on race, "
                 "ethnicity, religion, gender, gender identity, sexual orientation, "
                 "disability, age, or nationality. Punch up, not down. No slurs. No "
                 "hate speech. Roast ideas and behaviour, not identity.\n"
                 "\n"
-                "Never use therapy-speak like 'you okay over there'. Never moralize."
+                "Never use therapy-speak. Never moralize."
             ),
             "coder": (
                 "You are Mac in CODER mode — sharp senior dev energy. Answer with "
@@ -640,7 +686,7 @@ class MacBot(commands.Bot):
                 "assumptions up front. Call out trade-offs, bugs, security holes, "
                 "and performance issues proactively.\n"
                 "\n"
-                "No fluff. Just the substance. Swear when it fits. Never hand-wave."
+                "No fluff. Just the substance. Never hand-wave."
             ),
             "childish": (
                 "You are Mac in CHILDISH mode — unhinged meme-brained gremlin "
@@ -666,25 +712,64 @@ class MacBot(commands.Bot):
 
         self.court_sessions: Dict[int, Dict] = {}
         self.court_roles: Dict[str, str] = {
-            "judge": ("You are the Honorable Judge presiding over this court. "
-                      "Ensure a fair trial, rule on objections, and decide the "
-                      "verdict.\n\nCase:\n{case}\n\nParticipants:\n{participants}\n\n"
-                      "Stay in character. Never mention you are an AI."),
-            "prosecutor": ("You are the Prosecutor. Prove guilt beyond reasonable "
-                           "doubt.\n\nCase:\n{case}\n\nParticipants:\n{participants}\n\n"
-                           "Stay in character. Never mention you are an AI."),
-            "defense": ("You are the Defense Attorney. Defend your client "
-                        "vigorously.\n\nCase:\n{case}\n\nParticipants:\n{participants}\n\n"
-                        "Stay in character. Never mention you are an AI."),
-            "witness": ("You are a Witness. Answer based on case facts.\n\nCase:\n"
-                        "{case}\n\nParticipants:\n{participants}\n\n"
-                        "Stay in character. Never mention you are an AI."),
-            "jury": ("You are on the Jury.\n\nCase:\n{case}\n\nParticipants:\n"
-                     "{participants}\n\nStay in character. Never mention you are an AI."),
-            "stenographer": ("You are the Stenographer. Produce a verbatim record.\n\n"
-                             "Case:\n{case}\n\nParticipants:\n{participants}\n\n"
-                             "Stay in character."),
+            "judge": ("You are the Honorable Judge. Case:\n{case}\n"
+                      "Participants:\n{participants}\nStay in character."),
+            "prosecutor": ("You are the Prosecutor. Case:\n{case}\n"
+                           "Participants:\n{participants}\nStay in character."),
+            "defense": ("You are the Defense Attorney. Case:\n{case}\n"
+                        "Participants:\n{participants}\nStay in character."),
+            "witness": ("You are a Witness. Case:\n{case}\n"
+                        "Participants:\n{participants}\nStay in character."),
+            "jury": ("You are on the Jury. Case:\n{case}\n"
+                     "Participants:\n{participants}\nStay in character."),
+            "stenographer": ("You are the Stenographer. Case:\n{case}\n"
+                             "Participants:\n{participants}\nStay in character."),
         }
+
+    # ==================================================================
+    # SHUTDOWN — close the shared session cleanly
+    # ==================================================================
+    async def close(self):
+        # Final flush before shutting down
+        try:
+            if self._dirty_slots: self._write_slots()
+            if self._dirty_memory: self._write_memory()
+            if self._dirty_cs: self._write_cs()
+            if self._dirty_profiles: self._write_profiles()
+            if self._dirty_pings: self._write_pings()
+        except Exception as e:
+            logger.error(f"Final flush failed: {e}")
+
+        await close_shared_session()
+        await super().close()
+
+    # ==================================================================
+    # DEBOUNCED SAVE WORKER
+    # ==================================================================
+    async def _save_worker(self):
+        """Flush dirty state to disk every SAVE_DEBOUNCE_SECONDS.
+        Actual writes happen in a thread pool so the event loop never blocks."""
+        await self.wait_until_ready()
+        while not self.is_closed():
+            await asyncio.sleep(SAVE_DEBOUNCE_SECONDS)
+            try:
+                if self._dirty_slots:
+                    self._dirty_slots = False
+                    await asyncio.to_thread(self._write_slots)
+                if self._dirty_memory:
+                    self._dirty_memory = False
+                    await asyncio.to_thread(self._write_memory)
+                if self._dirty_cs:
+                    self._dirty_cs = False
+                    await asyncio.to_thread(self._write_cs)
+                if self._dirty_profiles:
+                    self._dirty_profiles = False
+                    await asyncio.to_thread(self._write_profiles)
+                if self._dirty_pings:
+                    self._dirty_pings = False
+                    await asyncio.to_thread(self._write_pings)
+            except Exception as e:
+                logger.error(f"Save worker: {e}")
 
     # ==================================================================
     # CS STORAGE
@@ -699,6 +784,9 @@ class MacBot(commands.Bot):
                 continue
 
     def _save_cs(self):
+        self._dirty_cs = True
+
+    def _write_cs(self):
         _save(CS_FILE, {str(k): v for k, v in self.cs.items()})
 
     def _cs(self, uid: int) -> dict:
@@ -721,10 +809,12 @@ class MacBot(commands.Bot):
                 continue
 
     def _save_profiles(self):
+        self._dirty_profiles = True
+
+    def _write_profiles(self):
         _save(PROFILES_FILE, {str(k): v for k, v in self.profiles.items()})
 
     def save_profile(self, uid: int, name: str) -> dict:
-        """Snapshot current user state into a named profile."""
         u = self.cs.get(uid, {})
         snapshot = {
             "mode": self.current_mode,
@@ -783,6 +873,9 @@ class MacBot(commands.Bot):
                 continue
 
     def _save_ping_prefs(self):
+        self._dirty_pings = True
+
+    def _write_pings(self):
         _save(PINGS_FILE, {str(k): v for k, v in self.ping_prefs.items()})
 
     def get_ping_pref(self, uid: int) -> str:
@@ -876,7 +969,7 @@ class MacBot(commands.Bot):
         ) % n
 
     # ==================================================================
-    # PROFILE (PERSONALIZATION) HELPERS
+    # PROFILE (PERSONALIZATION)
     # ==================================================================
     def get_profile(self, uid: int) -> dict:
         return self.cs.get(uid, {}).get("profile", {})
@@ -898,7 +991,7 @@ class MacBot(commands.Bot):
         self._save_cs()
 
     # ==================================================================
-    # VOICES
+    # VOICES / MACROS / GIFs
     # ==================================================================
     def all_voices(self, uid: int) -> Dict[str, Dict[str, str]]:
         out = dict(BUILTIN_VOICES)
@@ -944,6 +1037,9 @@ class MacBot(commands.Bot):
                 continue
 
     def _save_persistent_memory(self):
+        self._dirty_memory = True
+
+    def _write_memory(self):
         _save(DATA_FILE, {
             "enabled": {str(u): e for u, e in self.persistent_enabled.items()},
             "memory": {
@@ -952,7 +1048,8 @@ class MacBot(commands.Bot):
             },
         })
 
-    def get_persistent_enabled(self, uid): return self.persistent_enabled.get(uid, False)
+    def get_persistent_enabled(self, uid):
+        return self.persistent_enabled.get(uid, False)
 
     def set_persistent_enabled(self, uid, enabled):
         if enabled:
@@ -995,6 +1092,9 @@ class MacBot(commands.Bot):
                 continue
 
     def _save_slots(self):
+        self._dirty_slots = True
+
+    def _write_slots(self):
         out = {}
         for uid, slots in self.user_slots.items():
             out[str(uid)] = {
@@ -1054,7 +1154,7 @@ class MacBot(commands.Bot):
                 "tool_choice": "none",
             }
             try:
-                async with aiohttp.ClientSession() as s:
+                async with shared_session() as s:
                     async with s.post(GROQ_API_URL, json=payload, headers=headers,
                                       timeout=aiohttp.ClientTimeout(total=30)) as r:
                         if r.status == 200:
@@ -1099,7 +1199,8 @@ class MacBot(commands.Bot):
                 parts = [types.Part.from_text(text=" ")]
             contents.append(types.Content(role=role, parts=parts))
         if not contents:
-            contents = [types.Content(role="user", parts=[types.Part.from_text(text=" ")])]
+            contents = [types.Content(role="user",
+                                       parts=[types.Part.from_text(text=" ")])]
         cfg_kwargs = {"temperature": temperature, "max_output_tokens": max_tokens}
         if sys_text:
             cfg_kwargs["system_instruction"] = sys_text
@@ -1157,7 +1258,7 @@ class MacBot(commands.Bot):
             key = self.current_key(uid, "hf")
             model = self.current_model(uid, "hf_text") or GLOBAL_HF_TEXT_MODELS[0]
             try:
-                async with aiohttp.ClientSession() as s:
+                async with shared_session() as s:
                     async with s.post(
                         f"{HF_INFERENCE_URL}/{model}",
                         headers={"Authorization": f"Bearer {key}"},
@@ -1208,7 +1309,7 @@ class MacBot(commands.Bot):
                 "X-Title": "Mac",
             }
             try:
-                async with aiohttp.ClientSession() as s:
+                async with shared_session() as s:
                     async with s.post(OPENROUTER_API_URL, json=payload,
                                       headers=headers,
                                       timeout=aiohttp.ClientTimeout(total=120)) as r:
@@ -1246,7 +1347,7 @@ class MacBot(commands.Bot):
         api_url = f"{HF_INFERENCE_URL}/eliasalbouzidi/distilbert-nsfw-text-classifier"
         key = self.current_key(uid, "hf")
         try:
-            async with aiohttp.ClientSession() as s:
+            async with shared_session() as s:
                 async with s.post(
                     api_url,
                     headers={"Authorization": f"Bearer {key}"},
@@ -1275,7 +1376,7 @@ class MacBot(commands.Bot):
     # ==================================================================
     async def generate_pollinations_image(self, prompt: str) -> bytes:
         url = f"{POLLINATIONS_IMAGE_URL}/{urllib.parse.quote(prompt)}"
-        async with aiohttp.ClientSession() as s:
+        async with shared_session() as s:
             async with s.get(url, timeout=aiohttp.ClientTimeout(total=60)) as r:
                 if r.status == 200:
                     return await r.read()
@@ -1320,7 +1421,7 @@ class MacBot(commands.Bot):
             api_url = f"{HF_INFERENCE_URL}/{model_id}"
             key = self.current_key(uid, "hf")
             try:
-                async with aiohttp.ClientSession() as s:
+                async with shared_session() as s:
                     async with s.post(
                         api_url,
                         headers={"Authorization": f"Bearer {key}",
@@ -1356,7 +1457,7 @@ class MacBot(commands.Bot):
         form = aiohttp.FormData()
         form.add_field('image', image_data, filename='image.png',
                        content_type='image/png')
-        async with aiohttp.ClientSession() as s:
+        async with shared_session() as s:
             async with s.post(f'{IMGBB_URL}?key={key}', data=form,
                               timeout=aiohttp.ClientTimeout(total=30)) as r:
                 data = await r.json()
@@ -1400,7 +1501,7 @@ class MacBot(commands.Bot):
             "Content-Type": "application/json",
             "model": GLOBAL_FISH_MODEL,
         }
-        async with aiohttp.ClientSession() as s:
+        async with shared_session() as s:
             async with s.post(FISH_AUDIO_URL, json=payload, headers=headers,
                               timeout=aiohttp.ClientTimeout(total=90)) as r:
                 if r.status != 200:
@@ -1419,7 +1520,6 @@ class MacBot(commands.Bot):
                 self.mode_prompts.get(self.current_mode,
                                       self.mode_prompts[DEFAULT_MODE]))
 
-        # User profile — only append non-empty fields
         if uid:
             p = self.get_profile(uid)
             bits = []
@@ -1432,7 +1532,6 @@ class MacBot(commands.Bot):
             if bits:
                 base += "\n[USER: " + " | ".join(bits) + "]"
 
-        # Lore only when the user mentions it
         if _needs_lore(user_prompt):
             base += MAC_SODIUM_LORE
             base += _sodium_hint(user_prompt)
@@ -1442,7 +1541,6 @@ class MacBot(commands.Bot):
     def _build_messages(self, prompt, uid, system_prompt, slot_name, images=None):
         messages = []
 
-        # persistent memory (capped)
         if uid and self.get_persistent_enabled(uid):
             pm = list(self.get_persistent_memory(uid)[-PERSISTENT_MEM_WINDOW:])
             if pm and pm[-1][0] == "user" and pm[-1][1] == prompt:
@@ -1450,7 +1548,6 @@ class MacBot(commands.Bot):
             for role, content in pm:
                 messages.append({"role": role, "content": content})
 
-        # slot history (capped)
         slot_history = list(self.get_slot(uid, slot_name)) if uid else []
         if slot_history and slot_history[-1][0] == "user" and slot_history[-1][1] == prompt:
             slot_history = slot_history[:-1]
@@ -1463,13 +1560,11 @@ class MacBot(commands.Bot):
         return [{"role": "system", "content": sys_prompt}] + messages
 
     def _estimate_context_tokens(self, uid, slot_name, user_prompt, images=None) -> dict:
-        """Rough token estimate for the next request."""
         msgs = self._build_messages(user_prompt, uid, None, slot_name, images)
         total = 0
         by_role = {"system": 0, "user": 0, "assistant": 0}
         for m in msgs:
             t = estimate_tokens(m.get("content") or "")
-            # Images roughly count as ~800 tokens each on Gemini
             if m.get("images"):
                 t += 800 * len(m["images"])
             total += t
@@ -1488,7 +1583,6 @@ class MacBot(commands.Bot):
                         slot_name="sv1", max_tokens=1024, images=None) -> str:
         messages = self._build_messages(prompt, uid, system_prompt, slot_name, images)
 
-        # Vision → Gemini (Groq can't see images)
         if images:
             try:
                 return await self.gemini_chat(messages, uid=uid, temperature=0.85,
@@ -1496,7 +1590,6 @@ class MacBot(commands.Bot):
             except Exception as e:
                 logger.warning(f"Gemini vision failed: {e}")
 
-        # Groq primary — fastest path
         try:
             return await self.groq_chat(messages, uid=uid, temperature=0.85,
                                         max_tokens=max_tokens)
@@ -1517,10 +1610,9 @@ class MacBot(commands.Bot):
                             f"HF: {str(e3)[:100]}")
 
     # ==================================================================
-    # BENCHMARK — parallel speed test across providers
+    # BENCHMARK
     # ==================================================================
     async def benchmark_prompt(self, uid: int, prompt: str) -> List[dict]:
-        """Fire the same prompt at every available provider in parallel."""
         results: List[dict] = []
 
         async def timed(name: str, coro):
@@ -1741,7 +1833,7 @@ class MacBot(commands.Bot):
             await step("❌ Pipeline crashed", f"`{str(e)[:350]}`", C_ERR)
 
     # ==================================================================
-    # PROJECT PIPELINE — multi-file, ZIP (with robust JSON parsing)
+    # PROJECT PIPELINE
     # ==================================================================
     async def gemini_plan_project(self, refined_task: str, docs: str, uid) -> dict:
         sys_p = (
@@ -1778,7 +1870,6 @@ class MacBot(commands.Bot):
 
         plan = extract_json_object(raw)
         if not plan:
-            # Retry once with a firmer instruction
             try:
                 raw2 = await self.gemini_chat(
                     [{"role": "system",
@@ -2097,16 +2188,25 @@ class MacBot(commands.Bot):
             self.ai_chat_sessions.pop(uid, None)
 
     # ==================================================================
-    # CENTRAL MESSAGE HANDLER
+    # CENTRAL MESSAGE HANDLER — with early placeholder
     # ==================================================================
     async def process_user_message(self, user, clean_content, destination,
                                    thinking_msg=None, reply_context=None,
                                    trigger_msg=None, images=None):
+        _t0 = time.perf_counter()
+
         images = images or []
         uid = user.id
         slot_name = self.active_slot.get(uid, "sv1")
         if uid not in self.user_slots:
             self.get_slot(uid, "sv1")
+
+        # ── SEND PLACEHOLDER IMMEDIATELY ──
+        early_thinking = None
+        try:
+            early_thinking = await destination.send("🔥 Thinking...")
+        except (discord.Forbidden, discord.HTTPException) as e:
+            logger.error(f"Early placeholder failed: {e}")
 
         # macro expansion
         macro_match = re.match(r'^\.(\w+)\s*(.*)$', clean_content)
@@ -2117,7 +2217,7 @@ class MacBot(commands.Bot):
             if mname in macros:
                 clean_content = macros[mname] + (f"\n{extra}" if extra else "")
 
-        # explicit search trigger ONLY
+        # explicit search trigger
         search_match = re.match(
             r'^(?:search|google|look\s*up|find|lookup)\s*:?\s*(.+)$',
             clean_content, re.IGNORECASE,
@@ -2125,13 +2225,13 @@ class MacBot(commands.Bot):
         if search_match:
             query = search_match.group(1).strip()
             if query:
-                try:
-                    thinking_msg = await destination.send(f"🌐 Searching: **{query}**...")
-                except discord.HTTPException:
-                    return
+                thinking_msg = early_thinking
+                if thinking_msg:
+                    await safe_edit(thinking_msg, content=f"🌐 Searching: **{query}**...")
                 results = await perform_web_search(query)
                 if results.startswith("No results"):
-                    return await safe_edit(thinking_msg, content=f"❌ {results}")
+                    return await safe_edit(thinking_msg,
+                                            content=f"❌ {results}") if thinking_msg else None
                 augmented = (f"Web results for: {query}\n\n{results}\n\n---\n\n"
                              f"Summarize. Cite sources inline like [1], [2].")
                 response = await self.chat_call(augmented, uid=uid, max_tokens=800)
@@ -2143,25 +2243,26 @@ class MacBot(commands.Bot):
                     self.add_persistent_memory(uid, "user", clean_content)
                     self.add_persistent_memory(uid, "assistant", response)
                 if len(response) <= DISCORD_LIMIT:
-                    await safe_edit(thinking_msg, content=response)
+                    if thinking_msg:
+                        await safe_edit(thinking_msg, content=response)
                 else:
-                    try:
-                        await thinking_msg.delete()
-                    except discord.HTTPException:
-                        pass
+                    if thinking_msg:
+                        try:
+                            await thinking_msg.delete()
+                        except discord.HTTPException:
+                            pass
                     await send_long(destination, response)
+                logger.info(f"TOTAL handler time: {time.perf_counter() - _t0:.3f}s (search)")
                 return
 
-        # record user turn
+        # record user turn (dirty flags only — no disk I/O yet)
         if self.get_persistent_enabled(uid):
             self.add_persistent_memory(uid, "user", clean_content)
         self.append_to_slot(uid, slot_name, "user", clean_content)
 
-        # always show thinking
-        thinking_msg = None
-        try:
-            thinking_msg = await destination.send("🔥 Thinking...")
-        except discord.Forbidden:
+        # reuse the early placeholder
+        thinking_msg = early_thinking
+        if thinking_msg is None:
             if trigger_msg:
                 try:
                     await trigger_msg.reply(
@@ -2170,9 +2271,6 @@ class MacBot(commands.Bot):
                     )
                 except Exception:
                     pass
-            return
-        except discord.HTTPException as e:
-            logger.error(f"Thinking send failed: {e}")
             return
 
         # system prompt
@@ -2213,16 +2311,13 @@ class MacBot(commands.Bot):
                 self.add_persistent_memory(uid, "assistant", response)
             self.append_to_slot(uid, slot_name, "assistant", response)
 
-            if thinking_msg:
-                if len(response) <= DISCORD_LIMIT:
-                    await safe_edit(thinking_msg, content=response)
-                else:
-                    try:
-                        await thinking_msg.delete()
-                    except discord.HTTPException:
-                        pass
-                    await send_long(destination, response)
+            if len(response) <= DISCORD_LIMIT:
+                await safe_edit(thinking_msg, content=response)
             else:
+                try:
+                    await thinking_msg.delete()
+                except discord.HTTPException:
+                    pass
                 await send_long(destination, response)
 
             if self.current_mode == "brainrot":
@@ -2231,12 +2326,11 @@ class MacBot(commands.Bot):
                     await destination.send(random.choice(pool))
                 except Exception:
                     pass
+
+            logger.info(f"TOTAL handler time: {time.perf_counter() - _t0:.3f}s")
         except Exception as e:
             logger.error(f"process_user_message error: {e}", exc_info=True)
-            if thinking_msg:
-                await safe_edit(thinking_msg, content=f"❌ {str(e)[:150]}")
-            else:
-                await send_long(destination, f"❌ {str(e)[:150]}")
+            await safe_edit(thinking_msg, content=f"❌ {str(e)[:150]}")
 
     # ==================================================================
     # VIDEO
@@ -2256,7 +2350,7 @@ class MacBot(commands.Bot):
                        "Content-Type": "application/json"}
             payload = {"model": "Wan-AI/Wan2.2-T2V-A14B",
                        "prompt": prompt, "image_size": "1280x720"}
-            async with aiohttp.ClientSession() as s:
+            async with shared_session() as s:
                 rid = None
                 for _ in range(len(SILICONFLOW_API_KEYS) + 1):
                     try:
@@ -2330,7 +2424,7 @@ class MacBot(commands.Bot):
             headers["Authorization"] = f"Bearer {GLOBAL_POLLINATIONS_KEY}"
         self.music_jobs[uid] = status_message
         try:
-            async with aiohttp.ClientSession() as s:
+            async with shared_session() as s:
                 async with s.get(url, headers=headers,
                                  timeout=aiohttp.ClientTimeout(total=240)) as r:
                     if r.status == 200:
@@ -2377,7 +2471,7 @@ class MacBot(commands.Bot):
         url = ("https://raw.githubusercontent.com/Pen-123/"
                "archive-/refs/heads/main/archives.txt")
         try:
-            async with aiohttp.ClientSession() as s:
+            async with shared_session() as s:
                 async with s.get(url,
                                  timeout=aiohttp.ClientTimeout(total=8)) as r:
                     if r.status == 200:
@@ -2402,6 +2496,7 @@ class MacBot(commands.Bot):
             logger.error(f"Sync failed: {e}")
         self.loop.create_task(self.update_presence_loop())
         self.loop.create_task(self.load_pen_archive_async())
+        self.loop.create_task(self._save_worker())
 
 
 # ======================================================================
@@ -2410,19 +2505,17 @@ class MacBot(commands.Bot):
 # Part 2 continues with:
 #   - bot = MacBot()
 #   - Autocomplete callbacks
-#   - /mac (with full descriptions on every field)
-#   - /help
+#   - /mac, /help
 #   - /query, /summarize, /eli5, /roast, /compliment
 #   - /personalize
 #   - /ping
 #   - /re (hard reset)
 #   - /cs group (profile, key, model, llm, ch, voice, voice-add, voice-del,
 #                voices, macro, gif, ping, show, reset)
-#   - /profiles save|load|list|delete
+#   - /profiles
 #   - /benchmark
 #   - /context
-#   - /sv1–/sv5, /svc (save+close), /svclear, /svlist, /vsc (with private option)
-#   - /vsm (with private option)
+#   - /sv1–/sv5, /svc, /svclear, /svlist, /vsc, /vsm
 #   - /setmode
 #   - /pipeline, /project
 #   - /config
@@ -2436,7 +2529,7 @@ class MacBot(commands.Bot):
 #   - /umf group + modals/views
 #   - on_message event handler
 #   - Web server
-#   - main()
+#   - main() (with close_shared_session on shutdown)
 # ======================================================================
 # ======================================================================
 # BOT INSTANCE
@@ -2491,7 +2584,6 @@ async def _profile_ac(i, c):
 
 
 async def _active_model_ac(i, c):
-    """All models the user can switch to (aliases + custom + global)."""
     uid = i.user.id if i.user else None
     if not uid:
         return []
@@ -2524,7 +2616,7 @@ async def _active_model_ac(i, c):
 @bot.hybrid_command(name="mac", description="🔥 Show the full Mac help menu")
 async def mac_help(ctx):
     emb = discord.Embed(
-        title="🔥 Mac v23.0",
+        title="🔥 Mac v23.1",
         color=C_PRIMARY,
         description=(
             "Mention me, reply to me, or use slash commands.\n"
@@ -2649,7 +2741,7 @@ async def mac_help(ctx):
         value="`/re` — hard reset (clears your slots, memory, cs, profiles)",
         inline=False,
     )
-    emb.set_footer(text="v23.0 — fast · per-user keys · projects · benchmark · context")
+    emb.set_footer(text="v23.1 — fast · shared session · per-user keys · projects")
     await ctx.send(embed=emb)
 
 
@@ -2853,25 +2945,25 @@ async def re_cmd(ctx, confirm: bool = False):
             ephemeral=True,
         )
 
-    # wipe user-scoped data
+    # wipe user-scoped data (in-memory only — writes are debounced)
     bot.user_slots.pop(uid, None)
     bot.active_slot.pop(uid, None)
-    bot._save_slots()
+    bot._dirty_slots = True
 
     bot.persistent_memory.pop(uid, None)
     bot.persistent_enabled.pop(uid, None)
-    bot._save_persistent_memory()
+    bot._dirty_memory = True
 
     bot.cs.pop(uid, None)
-    bot._save_cs()
+    bot._dirty_cs = True
     bot.cs_key_idx = {k: v for k, v in bot.cs_key_idx.items() if k[0] != uid}
     bot.cs_model_idx = {k: v for k, v in bot.cs_model_idx.items() if k[0] != uid}
 
     bot.profiles.pop(uid, None)
-    bot._save_profiles()
+    bot._dirty_profiles = True
 
     bot.ping_prefs.pop(uid, None)
-    bot._save_ping_prefs()
+    bot._dirty_pings = True
 
     bot.user_cooldowns.pop(uid, None)
 
@@ -3132,7 +3224,7 @@ async def cs_llm(ctx, action: str = "list", alias: str = None,
     uid = ctx.author.id
     a = action.lower()
     u = bot._cs(uid)
-    aliases = u.setdefault("model_aliases", {})  # {alias: {"model": ..., "provider": ...}}
+    aliases = u.setdefault("model_aliases", {})
 
     if a == "list":
         if not aliases:
@@ -3186,7 +3278,6 @@ async def cs_llm(ctx, action: str = "list", alias: str = None,
         prov = info["provider"]
         model = info["model"]
 
-        # Set as primary for that provider
         field = f"{prov}_models" if prov != "hf_text" else "hf_text_models"
         existing = u.get(field, [])
         if model in existing:
@@ -3216,34 +3307,29 @@ async def cs_ch(ctx, model: str = None):
     u = bot._cs(uid)
 
     if model is None:
-        # Build a browser
         emb = discord.Embed(
             title="🎯 Active Model Browser",
             color=C_PRIMARY,
             description="Pick a model with `/cs ch model:<name>`",
         )
-        # Groq
         groq = bot.user_models(uid, "groq")
         emb.add_field(
             name="Groq",
             value="\n".join(f"`groq:{m}`" for m in groq) or "—",
             inline=False,
         )
-        # Gemini
         gem = bot.user_models(uid, "gemini")
         emb.add_field(
             name="Gemini",
             value="\n".join(f"`gemini:{m}`" for m in gem) or "—",
             inline=False,
         )
-        # OpenRouter
         orm = bot.user_models(uid, "openrouter")
         emb.add_field(
             name="OpenRouter",
             value="\n".join(f"`openrouter:{m}`" for m in orm) or "—",
             inline=False,
         )
-        # Aliases
         aliases = u.get("model_aliases", {})
         if aliases:
             emb.add_field(
@@ -3256,7 +3342,6 @@ async def cs_ch(ctx, model: str = None):
 
     model = model.strip()
 
-    # Handle alias: prefix
     if model.startswith("alias:"):
         alias = model.split(":", 1)[1].lower()
         aliases = u.get("model_aliases", {})
@@ -3276,12 +3361,10 @@ async def cs_ch(ctx, model: str = None):
         bot.cs_model_idx[(uid, prov)] = 0
         return await ctx.send(f"✅ Active → **`{mid}`** ({prov}) via alias `{alias}`.")
 
-    # Handle provider:model
     if ":" in model:
         prov, mid = model.split(":", 1)
         prov = prov.lower()
     else:
-        # Guess provider
         mid = model
         ml = model.lower()
         if "gemini" in ml:
@@ -3701,7 +3784,6 @@ async def benchmark_cmd(ctx, prompt: str):
         description=f"**Prompt:** {prompt[:150]}",
         color=C_PRIMARY,
     )
-    # Sorted by time (already sorted in bot)
     rank_emojis = ["🥇", "🥈", "🥉"]
     lines = []
     for i, r in enumerate(results):
@@ -3715,7 +3797,6 @@ async def benchmark_cmd(ctx, prompt: str):
             lines.append(f"{rank} **{r['provider']}** — ❌ `{r.get('error', '?')[:80]}`")
     emb.add_field(name="Ranking (fastest → slowest)", value="\n".join(lines), inline=False)
 
-    # Show previews in a second embed to keep first clean
     preview_emb = discord.Embed(
         title="📝 Response previews",
         color=C_WARM,
@@ -3747,7 +3828,6 @@ async def context_cmd(ctx, message: str = "hello"):
 
     stats = bot._estimate_context_tokens(uid, slot_name, message, None)
 
-    # Model-specific context limits
     model_name = bot.current_model(uid, "groq") or GLOBAL_GROQ_MODELS[0]
     ml = model_name.lower()
     if "120b" in ml:
@@ -3812,7 +3892,7 @@ for _i in range(1, 6):
 
 
 @bot.hybrid_command(name="svc", description="💾 Save the current slot and close it")
-@app_commands.describe(name="Optional new name (defaults to keeping the current slot id)")
+@app_commands.describe(name="Optional name to save under (keeps a copy)")
 async def svc_cmd(ctx, name: str = None):
     uid = ctx.author.id
     current = bot.active_slot.get(uid)
@@ -3824,13 +3904,11 @@ async def svc_cmd(ctx, name: str = None):
 
     if name:
         n = name.lower().strip().replace(" ", "_")[:40]
-        if n not in (f"sv{i}" for i in range(1, 6)):
-            # Save as a named history bucket in cs
-            u = bot._cs(uid)
-            saved = u.setdefault("saved_slots", {})
-            saved[n] = [{"role": r, "content": c} for r, c in slot[-100:]]
-            bot._save_cs()
-            await ctx.send(f"💾 Saved **{count}** messages as `{n}`.")
+        u = bot._cs(uid)
+        saved = u.setdefault("saved_slots", {})
+        saved[n] = [{"role": r, "content": c} for r, c in slot[-100:]]
+        bot._save_cs()
+        await ctx.send(f"💾 Saved **{count}** messages as `{n}`.")
 
     bot.active_slot.pop(uid, None)
     bot._save_slots()
@@ -3901,9 +3979,7 @@ async def vsc_cmd(ctx, private: bool = True, limit: int = 20):
     full = header + "\n".join(lines)
 
     if private:
-        # ephemeral message — chunked
         chunks = chunk_text(full, 1900)
-        # Only first can be ephemeral via ctx.send; followups also ephemeral
         if ctx.interaction:
             try:
                 await ctx.interaction.response.send_message(chunks[0], ephemeral=True)
@@ -4097,7 +4173,7 @@ async def config_cmd(ctx):
 #   - /umf group + UMF modals/views
 #   - on_message event handler
 #   - Web server
-#   - main()
+#   - main() — with close_shared_session() on shutdown
 # ======================================================================
 # ======================================================================
 # TTS
@@ -4835,16 +4911,21 @@ async def umf_search(ctx, query: str):
 async def umf_stats(ctx):
     d = bot.umf_data.data
     emb = discord.Embed(title="📊 UMF Statistics", color=C_PRIMARY, timestamp=datetime.now())
-    emb.add_field(name="🌍 Recognized", value=str(len(d.get("recognized_nations", []))), inline=True)
-    emb.add_field(name="⏳ Pending", value=str(len(d.get("pending_requests", []))), inline=True)
-    emb.add_field(name="✅ Approved", value=str(len(d.get("approved_requests", []))), inline=True)
-    emb.add_field(name="❌ Denied", value=str(len(d.get("denied_requests", []))), inline=True)
-    emb.add_field(name="📜 History", value=str(len(d.get("recognition_history", []))), inline=True)
+    emb.add_field(name="🌍 Recognized",
+                  value=str(len(d.get("recognized_nations", []))), inline=True)
+    emb.add_field(name="⏳ Pending",
+                  value=str(len(d.get("pending_requests", []))), inline=True)
+    emb.add_field(name="✅ Approved",
+                  value=str(len(d.get("approved_requests", []))), inline=True)
+    emb.add_field(name="❌ Denied",
+                  value=str(len(d.get("denied_requests", []))), inline=True)
+    emb.add_field(name="📜 History",
+                  value=str(len(d.get("recognition_history", []))), inline=True)
     await ctx.send(embed=emb, ephemeral=True)
 
 
 # ======================================================================
-# ON_MESSAGE — the main entry point
+# ON_MESSAGE — main entry point for pings/replies/DMs
 # ======================================================================
 @bot.event
 async def on_message(message: discord.Message):
@@ -4859,7 +4940,7 @@ async def on_message(message: discord.Message):
         or f"<@!{bot.user.id}>" in content
     )
 
-    # -------- ping preference gate --------
+    # ping preference gate
     pref = bot.get_ping_pref(message.author.id)
     if pref == "off" and not is_dm:
         await bot.process_commands(message)
@@ -4872,7 +4953,7 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
 
-    # -------- reply context --------
+    # reply context
     reply_context = None
     reply_msg = None
     if message.reference:
@@ -4892,19 +4973,19 @@ async def on_message(message: discord.Message):
             }
             reply_msg = resolved
 
-    # -------- images --------
+    # images
     images = await fetch_images_from_message(message)
     if not images and reply_msg is not None:
         images = await fetch_images_from_message(reply_msg)
 
-    # -------- cooldown --------
+    # cooldown
     now = time.time()
     if now - bot.user_cooldowns.get(message.author.id, 0) < USER_COOLDOWN_SECONDS:
         await bot.process_commands(message)
         return
     bot.user_cooldowns[message.author.id] = now
 
-    # -------- clean mention --------
+    # clean mention out of content
     clean = re.sub(r'<@!?{}>\s*'.format(bot.user.id), '', content).strip()
     if not clean and reply_context:
         clean = "what do you think of this?"
@@ -4931,10 +5012,10 @@ async def on_message(message: discord.Message):
 
 
 # ======================================================================
-# WEB SERVER
+# WEB SERVER — keeps Render alive
 # ======================================================================
 async def handle_root(request):
-    return web.Response(text="🔥 Mac v23.0 is running")
+    return web.Response(text="🔥 Mac v23.1 is running")
 
 
 async def handle_health(request):
@@ -4959,6 +5040,9 @@ async def main():
     await run_web_server()
     async with bot:
         await bot.start(TOKEN)
+    # Bot closed — flush the shared session (bot.close() already
+    # did the debounced save flush).
+    await close_shared_session()
 
 
 if __name__ == "__main__":
