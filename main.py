@@ -1,5 +1,5 @@
 # main.py — Mac v23.2
-# Per-user placeholder pref · per-guild UMF · GIF reader · fast
+# Per-user placeholder pref · per-guild UMF · GIF reader · Spotify→YouTube music
 import os
 import ast
 import asyncio
@@ -27,15 +27,6 @@ from bs4 import BeautifulSoup
 from google import genai
 from google.genai import types
 
-# optional voice support
-_VOICE_LIB_OK = False
-try:
-    import nacl  # noqa: F401
-    import davey  # noqa: F401
-    _VOICE_LIB_OK = True
-except Exception as _ve:
-    logger.warning(f"Voice libs missing: {_ve}")
-    _VOICE_LIB_OK = False
 # ======================================================================
 # LOGGING
 # ======================================================================
@@ -44,6 +35,17 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger('Mac')
+
+# ======================================================================
+# OPTIONAL VOICE SUPPORT (checked AFTER logger exists)
+# ======================================================================
+_VOICE_LIB_OK = False
+try:
+    import nacl  # noqa: F401
+    import davey  # noqa: F401
+    _VOICE_LIB_OK = True
+except Exception as _ve:
+    logger.warning(f"Voice libs missing: {_ve}")
 
 # ======================================================================
 # SHARED HTTP SESSION
@@ -176,7 +178,6 @@ FISH_AUDIO_URL = "https://api.fish.audio/v1/tts"
 IMGBB_URL = "https://api.imgbb.com/1/upload"
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_SEARCH_URL = "https://api.spotify.com/v1/search"
-ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
 
 # ======================================================================
 # BUILT-IN VOICES
@@ -207,7 +208,7 @@ MAX_KEYS_PER_PROVIDER   = 3
 MAX_MODELS_PER_PROVIDER = 3
 SEARCH_CACHE_TTL        = 300
 SAVE_DEBOUNCE_SECONDS   = 2
-CONTEXT_WINDOW_LIMIT    = 10   # max messages to show before/after
+CONTEXT_WINDOW_LIMIT    = 10
 
 DATA_FILE     = "data.json"
 CS_FILE       = "cs.json"
@@ -216,11 +217,12 @@ PINGS_FILE    = "pings.json"
 PROFILES_FILE = "profiles.json"
 CONFIG_FILE   = "config.json"
 UMF_FILE      = "umf_data.json"
+PLACEHOLDER_FILE = "placeholders.json"
 
 DEFAULT_MODE = "chill"
 
 BOT_START_TIME = time.time()
-_commands_served = 0  # incremented by handlers
+_commands_served = 0
 
 DEFAULT_BRAINROT_GIFS = [
     "https://static2.klipy.com/ii/e7539ef2aad336edaa067c28ee130b3c/ce/31/HNwM1qmpKK1ZHmOZG.mp4",
@@ -462,7 +464,6 @@ async def fetch_images_from_message(
         if len(out) >= max_count:
             break
         ct = (att.content_type or "").lower().split(";")[0].strip()
-        # allow gif + images
         if not (ct.startswith("image/") or ct == "image/gif"):
             continue
         if att.size and att.size > MAX_IMAGE_BYTES:
@@ -481,11 +482,9 @@ async def fetch_images_from_message(
 
 
 # ======================================================================
-# GIF READER — downloads the GIF, converts first frame to PNG via Pillow,
-# falls back to sending the raw bytes to Gemini (which handles GIFs natively).
+# GIF READER
 # ======================================================================
 async def read_gif_from_url(url: str) -> Optional[Tuple[bytes, str]]:
-    """Download a GIF/video URL and return (bytes, mime)."""
     if not url:
         return None
     try:
@@ -497,15 +496,11 @@ async def read_gif_from_url(url: str) -> Optional[Tuple[bytes, str]]:
                 data = await r.read()
                 if not data:
                     return None
-                # Figure out mime
                 if "gif" in ct:
                     return (data, "image/gif")
                 if ct.startswith("image/"):
                     return (data, ct.split(";")[0])
                 if "video/mp4" in ct or url.endswith(".mp4"):
-                    # Gemini can't ingest MP4 for vision; try extracting a
-                    # frame with Pillow if it's actually a GIF mislabeled,
-                    # otherwise return None.
                     return (data, "video/mp4")
                 return (data, ct or "application/octet-stream")
     except Exception as e:
@@ -514,7 +509,6 @@ async def read_gif_from_url(url: str) -> Optional[Tuple[bytes, str]]:
 
 
 async def fetch_first_frame_as_png(gif_bytes: bytes) -> Optional[bytes]:
-    """Try to extract the first frame of a GIF as PNG using Pillow."""
     try:
         from PIL import Image
     except ImportError:
@@ -629,8 +623,7 @@ DEFAULT_RECOGNIZED_NATIONS = ["United Mafia Federation"]
 
 
 class UMFData:
-    """Per-guild UMF storage. Each guild has its own recognized list,
-    pending requests, approved/denied history, and recognition log."""
+    """Per-guild UMF storage."""
 
     def __init__(self, filepath: str = UMF_FILE):
         self.filepath = filepath
@@ -640,7 +633,6 @@ class UMFData:
         raw = _load(self.filepath, {})
         if not isinstance(raw, dict):
             return {}
-        # Migration: if old format (flat), wrap under guild_id "global"
         if "recognized_nations" in raw:
             return {"global": raw}
         return raw
@@ -660,7 +652,6 @@ class UMFData:
             }
         return self.data[key]
 
-    # ---------- read ----------
     def get_recognized_nations(self, guild_id: Optional[int]) -> List[str]:
         return self._guild(guild_id).get("recognized_nations", [])
 
@@ -688,7 +679,6 @@ class UMFData:
             "history": len(g.get("recognition_history", [])),
         }
 
-    # ---------- write ----------
     def add_recognized_nation(self, guild_id: Optional[int], n: str) -> bool:
         g = self._guild(guild_id)
         ns = g.setdefault("recognized_nations", [])
@@ -770,35 +760,28 @@ class MacBot(commands.Bot):
         self.memory_enabled = True
         self.user_cooldowns: Dict[int, float] = {}
 
-        # cs storage
         self.cs: Dict[int, dict] = {}
         self._load_cs()
         self.cs_key_idx: Dict[Tuple[int, str], int] = {}
         self.cs_model_idx: Dict[Tuple[int, str], int] = {}
 
-        # profiles
         self.profiles: Dict[int, Dict[str, dict]] = {}
         self._load_profiles()
 
-        # ping prefs
         self.ping_prefs: Dict[int, str] = {}
         self._load_ping_prefs()
 
-        # placeholder prefs (True = show, False = typing indicator only)
         self.placeholder_prefs: Dict[int, bool] = {}
         self._load_placeholder_prefs()
 
-        # slots
         self.user_slots: Dict[int, Dict[str, List[Tuple[str, str]]]] = {}
         self.active_slot: Dict[int, str] = {}
         self._load_slots()
 
-        # persistent memory
         self.persistent_enabled: Dict[int, bool] = {}
         self.persistent_memory: Dict[int, List[Tuple[str, str]]] = {}
         self._load_persistent_memory()
 
-        # dirty flags for debounced saves
         self._dirty_slots = False
         self._dirty_memory = False
         self._dirty_cs = False
@@ -806,10 +789,8 @@ class MacBot(commands.Bot):
         self._dirty_pings = False
         self._dirty_placeholders = False
 
-        # system prompt cache
         self._sys_prompt_cache: Dict[Tuple[int, str], str] = {}
 
-        # modes
         self.current_mode = DEFAULT_MODE
         self.mode_prompts: Dict[str, str] = {
             "chill": (
@@ -857,7 +838,6 @@ class MacBot(commands.Bot):
             ),
         }
 
-        # runtime state
         self.current_image_mode = "smart"
         self.video_jobs: Dict[int, discord.Message] = {}
         self.music_jobs: Dict[int, discord.Message] = {}
@@ -883,10 +863,8 @@ class MacBot(commands.Bot):
                              "Participants:\n{participants}\nStay in character."),
         }
 
-        # UMF per-guild storage
         self.umf_data = UMFData()
 
-        # music sessions (per guild)
         self.music_sessions: Dict[int, Any] = {}
         self._pending_searches: Dict[int, List[dict]] = {}
 
@@ -1060,7 +1038,7 @@ class MacBot(commands.Bot):
     # PLACEHOLDER PREFS
     # ==================================================================
     def _load_placeholder_prefs(self):
-        raw = _load("placeholders.json", {})
+        raw = _load(PLACEHOLDER_FILE, {})
         self.placeholder_prefs = {}
         for k, v in raw.items():
             try:
@@ -1072,11 +1050,10 @@ class MacBot(commands.Bot):
         self._dirty_placeholders = True
 
     def _write_placeholders(self):
-        _save("placeholders.json",
+        _save(PLACEHOLDER_FILE,
               {str(k): v for k, v in self.placeholder_prefs.items()})
 
     def get_placeholder_pref(self, uid: int) -> bool:
-        """True = send 🔥 Thinking placeholder. False = typing only."""
         return self.placeholder_prefs.get(uid, True)
 
     def set_placeholder_pref(self, uid: int, value: bool):
@@ -1432,26 +1409,14 @@ class MacBot(commands.Bot):
         raise Exception(f"Gemini failed: {last_err}")
 
     async def describe_gif(self, url: str, uid=None) -> str:
-        """Download a GIF/MP4 and ask Gemini to describe it."""
         fetched = await read_gif_from_url(url)
         if not fetched:
             return "❌ Couldn't fetch that GIF."
-
         data, mime = fetched
-
-        # If it's an MP4 (Klipy serves .mp4 for some GIFs), try Gemini anyway —
-        # Gemini 3.x can accept MP4 in some configs. If not, fall back to
-        # telling the user what we know.
-        if mime == "video/mp4":
-            # Try Gemini — it may still work
-            pass
-
         if mime == "image/gif":
-            # Optionally extract a still frame for lower token cost
             png = await fetch_first_frame_as_png(data)
             if png:
                 data, mime = png, "image/png"
-
         try:
             resp = await self.gemini_chat(
                 [{"role": "user",
@@ -1880,8 +1845,7 @@ class MacBot(commands.Bot):
         return results
 
     # ==================================================================
-    # PIPELINE / PROJECT (unchanged, trimmed here for brevity — full
-    # versions live in Part 2 to keep this file readable)
+    # PIPELINE / PROJECT (compact versions)
     # ==================================================================
     async def gemini_refine_and_research(self, task: str, uid) -> Tuple[str, str]:
         search_results = await perform_web_search(task)
@@ -1923,13 +1887,250 @@ class MacBot(commands.Bot):
             return f"(reviewer error: {e})"
 
     async def run_pipeline(self, channel, uid, task, filename=None, max_iterations=3):
-        # Full impl in Part 2 (unchanged from v23.1)
-        from_caller = (channel, uid, task, filename, max_iterations)
-        logger.info(f"run_pipeline called {from_caller}")
+        filename = filename or infer_filename(task)
+        emb = discord.Embed(title="🏗️ Pipeline Started",
+                            description=f"**Task:** {task[:800]}\n**File:** `{filename}`",
+                            color=C_WARM)
+        status = await safe_send(channel, embed=emb)
+        if status is None:
+            return
+
+        async def step(title, body, color=C_PRIMARY):
+            e = discord.Embed(title=title, description=body[:4000], color=color)
+            e.set_footer(text=f"Pipeline · {filename}")
+            await safe_edit(status, embed=e)
+
+        try:
+            await step("1️⃣ GEMINI — refining", f"Task: {task[:350]}", C_WARM)
+            refined, docs = await self.gemini_refine_and_research(task, uid)
+            await step("1️⃣ GEMINI — ready",
+                       f"**Refined:**\n{refined[:1200]}\n\n**Docs:**\n{docs[:1200]}", C_OK)
+            await step("2️⃣ OPENROUTER — generating...", "⏳", C_DEEP)
+
+            def build_msgs(existing="", issues=""):
+                sp = ("Elite engineer. Produce a complete working solution. Output "
+                      "ONLY the file content in a single fenced code block.")
+                parts = [f"TASK:\n{refined}"]
+                if docs: parts.append(f"DOCS:\n{docs[:5000]}")
+                if existing: parts.append(f"EXISTING:\n```\n{existing[:7000]}\n```")
+                if issues: parts.append(f"FIX:\n{issues}")
+                parts.append(f"Deliverable: `{filename}`. ONLY the code block.")
+                return [{"role": "system", "content": sp},
+                        {"role": "user", "content": "\n\n".join(parts)}]
+
+            try:
+                raw_code = await self.openrouter_call(
+                    build_msgs(), uid=uid, temperature=0.5, max_tokens=6000)
+            except Exception as e:
+                await step("❌ OPENROUTER failed", f"`{str(e)[:280]}`", C_ERR)
+                return
+
+            code = strip_code_fences(raw_code) or raw_code.strip()
+            await step("2️⃣ OPENROUTER — draft ready", f"```\n{code[:3000]}\n```", C_OK)
+
+            final_code = code
+            approved = False
+            iteration = 0
+            for iteration in range(1, max_iterations + 1):
+                await step(f"3️⃣ GEMINI review — {iteration}/{max_iterations}",
+                           f"Checking ({len(final_code)} chars)...", C_WARM)
+                review = await self.gemini_review(refined, final_code, uid)
+                if review.strip().upper().startswith("APPROVED"):
+                    await step(f"3️⃣ GEMINI — {iteration}",
+                               f"✅ APPROVED\n\n{review[:2500]}", C_OK)
+                    approved = True
+                    break
+                await step(f"3️⃣ GEMINI — {iteration}",
+                           f"⚠️ Issues\n\n{review[:2800]}", C_ACCENT)
+                await step(f"4️⃣ OPENROUTER — fixing ({iteration})", "⏳", C_DEEP)
+                try:
+                    raw_fixed = await self.openrouter_call(
+                        build_msgs(existing=final_code, issues=review),
+                        uid=uid, temperature=0.4, max_tokens=6000)
+                except Exception as e:
+                    await step(f"❌ Fix failed ({iteration})",
+                               f"`{str(e)[:280]}`", C_ERR)
+                    break
+                fixed = strip_code_fences(raw_fixed) or raw_fixed.strip()
+                if not fixed.strip():
+                    break
+                final_code = fixed
+                await step(f"4️⃣ OPENROUTER — fix ({iteration})",
+                           f"```\n{final_code[:2800]}\n```", C_PRIMARY)
+
+            summary = discord.Embed(
+                title=f"✅ Complete — `{filename}`",
+                description=(f"**Review:** {'APPROVED' if approved else 'max iter'}\n"
+                             f"**Size:** {len(final_code)} chars\n"
+                             f"**Iterations:** {iteration}"),
+                color=C_OK if approved else C_WARM)
+            await safe_edit(status, embed=summary)
+            buf = io.BytesIO(final_code.encode("utf-8"))
+            try:
+                await safe_send(channel, content=f"📦 **`{filename}`**",
+                                file=discord.File(buf, filename=filename))
+            except discord.HTTPException as e:
+                await send_long(channel, f"❌ Attach failed ({e}).\n\n{final_code}")
+        except Exception as e:
+            logger.error(f"Pipeline crashed: {e}")
+            await step("❌ Pipeline crashed", f"`{str(e)[:350]}`", C_ERR)
 
     async def run_project(self, channel, uid, task, project_name=None, max_iterations=2):
-        # Full impl in Part 2 (unchanged from v23.1)
-        logger.info(f"run_project called")
+        # (Compact version — same as v23.1)
+        emb = discord.Embed(title="🏗️ Project Pipeline", description=f"**Task:** {task[:800]}",
+                            color=C_WARM)
+        status = await safe_send(channel, embed=emb)
+        if status is None:
+            return
+
+        async def step(title, body, color=C_PRIMARY):
+            e = discord.Embed(title=title, description=body[:4000], color=color)
+            await safe_edit(status, embed=e)
+
+        try:
+            await step("1️⃣ GEMINI — refining", f"Task: {task[:350]}", C_WARM)
+            refined, docs = await self.gemini_refine_and_research(task, uid)
+            await step("2️⃣ GEMINI — planning", "⏳", C_ACCENT)
+
+            # Planning prompt
+            sys_p = (
+                "Senior architect. Output ONLY valid JSON:\n"
+                '{"project_name":"snake_case","description":"one-line",'
+                '"files":[{"path":"main.py","purpose":"..."},'
+                '{"path":"requirements.txt","purpose":"..."},'
+                '{"path":"README.md","purpose":"..."}]}\n'
+                "3-12 files, always include README.md. Relative paths only."
+            )
+            raw = await self.gemini_chat(
+                [{"role": "system", "content": sys_p},
+                 {"role": "user", "content": f"Task: {refined[:1000]}"}],
+                uid=uid, temperature=0.3, max_tokens=1500)
+            plan = extract_json_object(raw)
+            if not plan:
+                try:
+                    raw2 = await self.gemini_chat(
+                        [{"role": "system", "content": "Output ONLY the JSON."},
+                         {"role": "user", "content": f"Task: {refined[:400]}"}],
+                        uid=uid, temperature=0.1, max_tokens=1200)
+                    plan = extract_json_object(raw2)
+                except Exception:
+                    pass
+            if not plan:
+                raise Exception("Planning failed — no valid JSON")
+
+            proj = re.sub(r'[^a-z0-9_\-]', '_',
+                          str(plan.get("project_name", "project")).lower())[:40] or "project"
+            proj_desc = plan.get("description", task[:200])
+            file_list = []
+            for f in plan.get("files", [])[:12]:
+                p = str(f.get("path", "")).strip().lstrip("/\\").replace("..", "_")
+                if p and len(p) <= 200:
+                    file_list.append({"path": p, "purpose": str(f.get("purpose", ""))[:200]})
+            if not file_list:
+                raise Exception("Plan had no valid files")
+
+            manifest = "\n".join(f"• `{f['path']}` — {f['purpose']}" for f in file_list)
+            await step(f"2️⃣ GEMINI — `{proj}` ({len(file_list)} files)",
+                       manifest, C_OK)
+
+            files: Dict[str, str] = {}
+            for i, fi in enumerate(file_list, 1):
+                await step(f"3️⃣ OPENROUTER — {i}/{len(file_list)}: `{fi['path']}`",
+                           fi["purpose"], C_DEEP)
+                if fi["path"].lower().endswith(".md"):
+                    sp = ("Write a concise README.md. Output ONLY markdown.")
+                elif fi["path"].lower() == "requirements.txt":
+                    sp = ("Output ONLY requirements.txt, one package per line.")
+                else:
+                    sp = ("Elite engineer. Output ONLY the full file content. No fences.")
+                usr = (f"PROJECT: {proj_desc}\nTASK: {refined}\n\n"
+                       f"FILE: `{fi['path']}`\nPURPOSE: {fi['purpose']}\n\n"
+                       f"DOCS:\n{docs[:3000]}\n\nOutput ONLY the content of `{fi['path']}`.")
+                try:
+                    c = await self.openrouter_call(
+                        [{"role": "system", "content": sp},
+                         {"role": "user", "content": usr}],
+                        uid=uid, temperature=0.4, max_tokens=6000)
+                    files[fi["path"]] = strip_code_fences(c) or c
+                except Exception as e:
+                    files[fi["path"]] = f"# ERROR: {e}\n"
+
+            preview = "\n".join(f"• `{p}` ({len(c)} chars)" for p, c in files.items())
+            await step(f"3️⃣ OPENROUTER — {len(files)} files ready", preview, C_OK)
+
+            approved = False
+            iteration = 0
+            for iteration in range(1, max_iterations + 1):
+                await step(f"4️⃣ GEMINI — review ({iteration}/{max_iterations})",
+                           "⏳", C_WARM)
+                manifest = "\n".join(f"- {p} ({len(c)} chars)" for p, c in files.items())
+                budget = 6000
+                snippets = []
+                for p, c in files.items():
+                    snippets.append(f"=== {p} ===\n{c[:budget // max(1, len(files))]}")
+                body = "\n\n".join(snippets)
+                sp = ("Strict senior reviewer. If correct+complete, reply EXACTLY "
+                      "APPROVED + summary. Otherwise numbered issues naming the file.")
+                usr = (f"TASK: {refined}\nPROJECT: {proj}\n\nFILES:\n{manifest}\n\n"
+                       f"CONTENT:\n{body}")
+                try:
+                    review = await self.gemini_chat(
+                        [{"role": "system", "content": sp},
+                         {"role": "user", "content": usr}],
+                        uid=uid, temperature=0.3, max_tokens=2000)
+                except Exception as e:
+                    review = f"(reviewer error: {e})"
+
+                if review.strip().upper().startswith("APPROVED"):
+                    await step(f"4️⃣ GEMINI — APPROVED ({iteration})",
+                               review[:2000], C_OK)
+                    approved = True
+                    break
+                await step(f"4️⃣ GEMINI — issues ({iteration})",
+                           f"⚠️\n\n{review[:2800]}", C_ACCENT)
+                await step(f"5️⃣ OPENROUTER — fixing ({iteration})",
+                           "⏳", C_DEEP)
+                fix_sp = "Fix per feedback. Output ONLY the updated file content."
+                for path, content in list(files.items()):
+                    if (path.lower() not in review.lower()
+                            and "all files" not in review.lower()):
+                        continue
+                    usr = (f"PROJECT: {proj_desc}\nTASK: {refined}\n\n"
+                           f"FILE: `{path}`\nCURRENT:\n```\n{content[:5000]}\n```\n\n"
+                           f"FEEDBACK:\n{review[:3000]}\n\nOutput the full corrected "
+                           f"content of `{path}`.")
+                    try:
+                        nc = await self.openrouter_call(
+                            [{"role": "system", "content": fix_sp},
+                             {"role": "user", "content": usr}],
+                            uid=uid, temperature=0.3, max_tokens=6000)
+                        files[path] = strip_code_fences(nc) or nc
+                    except Exception as e:
+                        logger.warning(f"Fix failed for {path}: {e}")
+
+            await step("6️⃣ Packaging...", "⏳", C_PRIMARY)
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for path, content in files.items():
+                    zf.writestr(f"{proj}/{path}", content)
+            buf.seek(0)
+
+            summary = discord.Embed(
+                title=f"✅ Complete — `{proj}`",
+                description=(f"**Files:** {len(files)}\n"
+                             f"**Review:** {'APPROVED' if approved else f'max iter'}\n"
+                             f"**Iterations:** {iteration}"),
+                color=C_OK if approved else C_WARM)
+            await safe_edit(status, embed=summary)
+            try:
+                await safe_send(channel,
+                                content=f"📦 **`{proj}.zip`** — {len(files)} files",
+                                file=discord.File(buf, filename=f"{proj}.zip"))
+            except discord.HTTPException as e:
+                await send_long(channel, f"❌ Zip attach failed: {e}")
+        except Exception as e:
+            logger.error(f"Project error: {e}", exc_info=True)
+            await step("❌ Project crashed", f"`{str(e)[:350]}`", C_ERR)
 
     # ==================================================================
     # DEBATE
@@ -1951,7 +2152,7 @@ class MacBot(commands.Bot):
             return re.sub(r'<think>.*?</think>', '', t, flags=re.DOTALL).strip()
 
         try:
-            await send_long(ch, f"🏟️ **AI DEBATE – {desc}**\n🤠 **AI1** vs 🤖 **AI2**")
+            await send_long(ch, f"🏟️ **AI DEBATE – {desc}**")
             while turn < max_turns:
                 if uid not in self.ai_chat_sessions:
                     break
@@ -2001,7 +2202,7 @@ class MacBot(commands.Bot):
             self.ai_chat_sessions.pop(uid, None)
 
     # ==================================================================
-    # CENTRAL MESSAGE HANDLER — respects placeholder pref + parallel fire
+    # CENTRAL MESSAGE HANDLER
     # ==================================================================
     async def process_user_message(self, user, clean_content, destination,
                                    thinking_msg=None, reply_context=None,
@@ -2015,7 +2216,6 @@ class MacBot(commands.Bot):
 
         show_placeholder = self.get_placeholder_pref(uid)
 
-        # Fire placeholder/typing in background so it doesn't block the AI call
         placeholder_task = None
         early_thinking = None
         if show_placeholder:
@@ -2088,7 +2288,6 @@ class MacBot(commands.Bot):
         if placeholder_task:
             early_thinking = await placeholder_task
 
-        # build system prompt
         system_prompt = None
         court = self.court_sessions.get(uid)
         if court and court.get("case"):
@@ -2130,8 +2329,6 @@ class MacBot(commands.Bot):
                         pass
                     await send_long(destination, response)
             else:
-                # no placeholder → use typing indicator was already shown during
-                # the await; just send the response
                 await send_long(destination, response)
 
             if self.current_mode == "brainrot":
@@ -2150,7 +2347,7 @@ class MacBot(commands.Bot):
                 await send_long(destination, f"❌ {str(e)[:150]}")
 
     # ==================================================================
-    # VIDEO / MUSIC
+    # VIDEO / MUSIC GENERATION
     # ==================================================================
     async def generate_video(self, prompt, uid, status_message):
         if not SILICONFLOW_API_KEYS:
@@ -2317,36 +2514,31 @@ class MacBot(commands.Bot):
 # ======================================================================
 # END OF PART 1
 # ======================================================================
-# Part 2 continues with:
+# Part 2 (next message):
 #   - bot = MacBot()
 #   - Autocomplete callbacks
 #   - /mac, /help
 #   - /query, /summarize, /eli5, /roast, /compliment
 #   - /personalize
-#   - /ping (button-based with uptime + command count)
-#   - /re (hard reset)
-#   - /softreset (soft reset)
-#   - /cs group (profile, key, model, llm, ch, voice, voice-add, voice-del,
-#                voices, macro, gif, ping, PLACEHOLDER, CONTEXT, show, reset)
-#   - /profiles
-#   - /benchmark
-#   - /context
+#   - /ping (button panel) + /pa /pd
+#   - /softreset, /re
+#   - /cs group (profile, key, model, llm, ch, voice, voice-add,
+#                voice-del, voices, macro, gif, ping, placeholder,
+#                context, show, reset)
+#   - /profiles, /benchmark, /context
 #   - /sv1–/sv5, /svc, /svclear, /svlist, /vsc, /vsm
-#   - /setmode
-#   - /pipeline, /project
-#   - /config
-#   - /readgif
+#   - /setmode, /pipeline, /project, /config
 #
-# Part 3 continues with:
+# Part 3 (after that):
 #   - /tts, /render, /rendermode, /hf_model
-#   - /video, /music (VC panel)
+#   - /video
+#   - NEW music add-on (/music panel, /play, yt-dlp, Spotify, Join VC)
 #   - /debate
 #   - /sm, /persistent, /persistentdisable, /persistentreset
-#   - /court (fully button-based)
-#   - /umf (fully button-based, per-guild)
-#   - on_message event handler
-#   - Web server
-#   - main()
+#   - /court (button panel)
+#   - /umf (button panel, per-guild)
+#   - on_message (GIF reader baked in)
+#   - Web server + main()
 # ======================================================================
 # ======================================================================
 # BOT INSTANCE
@@ -2355,7 +2547,7 @@ bot = MacBot()
 
 
 # ======================================================================
-# AUTOCOMPLETE
+# AUTOCOMPLETE CALLBACKS
 # ======================================================================
 async def _provider_ac(i, c):
     return [app_commands.Choice(name=p, value=p)
@@ -2484,7 +2676,7 @@ async def mac_help(ctx):
                   value="`/pipeline <task> [filename] [iterations]` · `/project <task> [name] [iterations]`",
                   inline=False)
     emb.add_field(name="🎵 Music",
-                  value="`/music` — VC panel with search, queue, loop modes",
+                  value="`/music` — VC panel with search, queue, loop modes · `/play <song>`",
                   inline=False)
     emb.add_field(name="🖼️ Media",
                   value="`/render` · `/tts` · `/video` · `/rendermode` · `/hf_model`",
@@ -2493,7 +2685,7 @@ async def mac_help(ctx):
                   value="`/debate` · `/court` · `/umf`",
                   inline=False)
     emb.add_field(name="♻️ Resets",
-                  value="`/softreset` — wipes slots + memory, keeps /cs\n"
+                  value="`/src` — soft reset (wipes slots + memory, keeps /cs)\n"
                         "`/re` — hard reset (wipes everything user-scoped)",
                   inline=False)
     emb.set_footer(text="v23.2 — fast · shared session · GIF reader · per-guild UMF")
@@ -2683,22 +2875,22 @@ async def pd_cmd(ctx):
 
 
 # ======================================================================
-# RESETS
+# RESETS — /src (soft) and /re (hard)
 # ======================================================================
 @bot.hybrid_command(
-    name="softreset",
-    description="♻️ Wipe slots + memory, but KEEP /cs customization and profiles")
+    name="src",
+    description="♻️ Soft reset — wipes slots + memory, but KEEPS /cs customization and profiles")
 @app_commands.describe(confirm="Set to True to confirm")
-async def softreset_cmd(ctx, confirm: bool = False):
+async def src_cmd(ctx, confirm: bool = False):
     uid = ctx.author.id
     if not confirm:
         return await ctx.send(
-            "⚠️ **Soft reset** wipes:\n"
+            "⚠️ **Soft reset (`/src`)** wipes:\n"
             "• Chat slots (sv1–sv5) and active state\n"
             "• Short-term + persistent memory\n"
             "• Ping preference and placeholder pref\n\n"
             "But **keeps** your `/cs` settings and saved profiles.\n\n"
-            "Run `/softreset confirm:True` to proceed.", ephemeral=True)
+            "Run `/src confirm:True` to proceed.", ephemeral=True)
     bot.user_slots.pop(uid, None); bot.active_slot.pop(uid, None)
     bot._dirty_slots = True
     bot.persistent_memory.pop(uid, None); bot.persistent_enabled.pop(uid, None)
@@ -2718,8 +2910,9 @@ async def re_cmd(ctx, confirm: bool = False):
     uid = ctx.author.id
     if not confirm:
         return await ctx.send(
-            "⚠️ **Hard reset** wipes everything user-scoped including `/cs` "
-            "and profiles.\nRun `/re confirm:True` to proceed.", ephemeral=True)
+            "⚠️ **Hard reset (`/re`)** wipes everything user-scoped including "
+            "`/cs` and profiles.\nRun `/re confirm:True` to proceed.",
+            ephemeral=True)
     bot.user_slots.pop(uid, None); bot.active_slot.pop(uid, None)
     bot._dirty_slots = True
     bot.persistent_memory.pop(uid, None); bot.persistent_enabled.pop(uid, None)
@@ -2814,7 +3007,8 @@ async def cs_key(ctx, provider: str, action: str = "list", value: str = None):
     a = action.lower()
     if a == "list":
         if not keys:
-            return await ctx.send(f"No custom `{p}` keys — using bot defaults.", ephemeral=True)
+            return await ctx.send(f"No custom `{p}` keys — using bot defaults.",
+                                  ephemeral=True)
         masked = [f"`{i}` ...{k[-6:]}" for i, k in enumerate(keys)]
         return await ctx.send(f"**Your `{p}` keys ({len(keys)}/3):**\n" + "\n".join(masked),
                               ephemeral=True)
@@ -2885,7 +3079,8 @@ async def cs_llm(ctx, action: str = "list", alias: str = None,
     if a == "list":
         if not aliases:
             return await ctx.send(
-                "No aliases. `/cs llm add alias:fast model_id:openai/gpt-oss-safeguard-20b provider:groq`",
+                "No aliases. `/cs llm add alias:fast "
+                "model_id:openai/gpt-oss-safeguard-20b provider:groq`",
                 ephemeral=True)
         active = u.get("active_alias")
         lines = []
@@ -2935,11 +3130,14 @@ async def cs_ch(ctx, model: str = None):
     u = bot._cs(uid)
     if model is None:
         emb = discord.Embed(title="🎯 Active Model Browser", color=C_PRIMARY)
-        emb.add_field(name="Groq", value="\n".join(f"`groq:{m}`" for m in bot.user_models(uid, "groq")) or "—",
+        emb.add_field(name="Groq",
+                      value="\n".join(f"`groq:{m}`" for m in bot.user_models(uid, "groq")) or "—",
                       inline=False)
-        emb.add_field(name="Gemini", value="\n".join(f"`gemini:{m}`" for m in bot.user_models(uid, "gemini")) or "—",
+        emb.add_field(name="Gemini",
+                      value="\n".join(f"`gemini:{m}`" for m in bot.user_models(uid, "gemini")) or "—",
                       inline=False)
-        emb.add_field(name="OpenRouter", value="\n".join(f"`openrouter:{m}`" for m in bot.user_models(uid, "openrouter")) or "—",
+        emb.add_field(name="OpenRouter",
+                      value="\n".join(f"`openrouter:{m}`" for m in bot.user_models(uid, "openrouter")) or "—",
                       inline=False)
         return await ctx.send(embed=emb, ephemeral=True)
     m = model.strip()
@@ -3108,14 +3306,12 @@ async def cs_context(ctx, message: str, before: int = 3, after: int = 3):
     before = max(0, min(CONTEXT_WINDOW_LIMIT, before))
     after = max(0, min(CONTEXT_WINDOW_LIMIT, after))
 
-    # Parse message reference
     target_id: Optional[int] = None
     channel = ctx.channel
     raw = message.strip()
     if raw.isdigit():
         target_id = int(raw)
     else:
-        # jump link format: https://discord.com/channels/GUILD/CHANNEL/MSG
         m = re.search(r"/channels/(\d+)/(\d+)/(\d+)", raw)
         if m:
             ch_id = int(m.group(2)); target_id = int(m.group(3))
@@ -3132,7 +3328,6 @@ async def cs_context(ctx, message: str, before: int = 3, after: int = 3):
     except Exception as e:
         return await ctx.send(f"❌ Couldn't fetch message: {e}", ephemeral=True)
 
-    # Fetch surrounding messages using Discord's `around` param
     try:
         window = await channel.history(
             limit=before + after + 1,
@@ -3144,7 +3339,6 @@ async def cs_context(ctx, message: str, before: int = 3, after: int = 3):
     if not window:
         return await ctx.send("📭 No messages found.", ephemeral=True)
 
-    # Build the transcript
     lines = []
     for msg in window:
         marker = "▶️ " if msg.id == anchor.id else "   "
@@ -3158,7 +3352,6 @@ async def cs_context(ctx, message: str, before: int = 3, after: int = 3):
               f"-# {before} before · {after} after\n\n")
     full = header + "\n".join(lines)
 
-    # send ephemerally
     chunks = chunk_text(full, 1900)
     if ctx.interaction:
         try:
@@ -3288,7 +3481,8 @@ async def benchmark_cmd(ctx, prompt: str):
     results = await bot.benchmark_prompt(ctx.author.id, prompt)
     if not results:
         return await safe_edit(status, content="❌ No providers configured.")
-    emb = discord.Embed(title="📊 Benchmark", description=f"**Prompt:** {prompt[:150]}",
+    emb = discord.Embed(title="📊 Benchmark",
+                        description=f"**Prompt:** {prompt[:150]}",
                         color=C_PRIMARY)
     rank = ["🥇", "🥈", "🥉"]
     lines = []
@@ -3557,16 +3751,16 @@ async def config_cmd(ctx):
 # ======================================================================
 # END OF PART 2
 # ======================================================================
-# Part 3:
+# Part 3 (next message):
 #   - /tts, /render, /rendermode, /hf_model
-#   - /video, /music (VC panel)
+#   - /video
+#   - NEW music add-on (/music panel + /play + Join VC + yt-dlp + Spotify)
 #   - /debate
 #   - /sm, /persistent, /persistentdisable, /persistentreset
-#   - /court (button-based)
-#   - /umf (button-based, per-guild, with "I am an admin" gate)
-#   - on_message (with baked-in GIF reader)
-#   - Web server
-#   - main()
+#   - /court (button panel)
+#   - /umf (button panel, per-guild, admin gate)
+#   - on_message (GIF reader baked in)
+#   - Web server + main()
 # ======================================================================
 # ======================================================================
 # TTS
@@ -3669,7 +3863,7 @@ async def hf_model_cmd(ctx, model: str = None):
 
 
 # ======================================================================
-# MEDIA
+# VIDEO
 # ======================================================================
 @bot.hybrid_command(name="video", description="🎬 Generate a video from a prompt")
 @app_commands.describe(prompt="Describe the video")
@@ -3680,8 +3874,74 @@ async def video_cmd(ctx, prompt: str):
 
 
 # ======================================================================
-# MUSIC — VC panel
+# MUSIC — Spotify search + yt-dlp full-track playback
+# Live autocomplete dropdown · Join VC button · Full tracks (no previews)
 # ======================================================================
+import yt_dlp
+
+_YTDL_OPTS = {
+    "format": "bestaudio/best",
+    "noplaylist": True,
+    "quiet": True,
+    "no_warnings": True,
+    "skip_download": True,
+    "default_search": "ytsearch",
+    "extract_flat": False,
+    "cachedir": False,
+}
+
+
+def _yt_extract_sync(query: str, limit: int = 1) -> List[dict]:
+    try:
+        opts = dict(_YTDL_OPTS)
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+        return info.get("entries", []) or []
+    except Exception as e:
+        logger.warning(f"yt-dlp extract failed: {e}")
+        return []
+
+
+async def yt_search(query: str, limit: int = 10) -> List[dict]:
+    return await asyncio.to_thread(_yt_extract_sync, query, limit)
+
+
+def _pick_best_audio(entry: dict) -> Optional[str]:
+    if entry.get("url") and entry["url"].startswith("http"):
+        return entry["url"]
+    formats = entry.get("formats") or []
+    audio = [f for f in formats
+             if f.get("acodec") and f["acodec"] != "none"
+             and f.get("vcodec") in (None, "none")]
+    if not audio:
+        audio = [f for f in formats if f.get("acodec") and f["acodec"] != "none"]
+    if not audio:
+        return None
+    audio.sort(key=lambda f: (f.get("abr") or 0, f.get("tbr") or 0), reverse=True)
+    return audio[0].get("url")
+
+
+def _yt_entry_to_track(entry: dict, meta_override: Optional[dict] = None) -> Optional[dict]:
+    stream = _pick_best_audio(entry)
+    if not stream:
+        return None
+    title = (meta_override or {}).get("title") or entry.get("title") or "?"
+    artist = ((meta_override or {}).get("artist")
+              or entry.get("uploader")
+              or entry.get("channel") or "?")
+    thumb = (meta_override or {}).get("thumb") or entry.get("thumbnail")
+    return {
+        "title": title[:120],
+        "artist": artist[:120],
+        "source": (meta_override or {}).get("source", "youtube"),
+        "stream_url": stream,
+        "url": entry.get("webpage_url") or stream,
+        "duration_ms": int((entry.get("duration") or 0) * 1000) or None,
+        "thumb": thumb,
+    }
+
+
+# ---------- Spotify (metadata only) ----------
 _SPOTIFY_TOKEN: Optional[str] = None
 _SPOTIFY_TOKEN_EXP: float = 0.0
 
@@ -3701,8 +3961,7 @@ async def _spotify_token() -> Optional[str]:
                 headers={"Authorization": f"Basic {auth}",
                          "Content-Type": "application/x-www-form-urlencoded"},
                 data={"grant_type": "client_credentials"},
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as r:
+                timeout=aiohttp.ClientTimeout(total=10)) as r:
                 if r.status != 200:
                     return None
                 d = await r.json()
@@ -3714,7 +3973,7 @@ async def _spotify_token() -> Optional[str]:
         return None
 
 
-async def _search_spotify(query: str, limit: int = 8) -> List[dict]:
+async def spotify_search_tracks(query: str, limit: int = 10) -> List[dict]:
     tok = await _spotify_token()
     if not tok:
         return []
@@ -3724,8 +3983,7 @@ async def _search_spotify(query: str, limit: int = 8) -> List[dict]:
                 SPOTIFY_SEARCH_URL,
                 headers={"Authorization": f"Bearer {tok}"},
                 params={"q": query, "type": "track", "limit": limit},
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as r:
+                timeout=aiohttp.ClientTimeout(total=8)) as r:
                 if r.status != 200:
                     return []
                 d = await r.json()
@@ -3733,64 +3991,103 @@ async def _search_spotify(query: str, limit: int = 8) -> List[dict]:
         for t in d.get("tracks", {}).get("items", []):
             artists = ", ".join(a["name"] for a in t.get("artists", []))
             out.append({
-                "title": t.get("name", "?"), "artist": artists or "?",
+                "title": t.get("name", "?"),
+                "artist": artists or "?",
                 "source": "spotify",
-                "preview_url": t.get("preview_url"),
+                "spotify_id": t.get("id"),
                 "url": t.get("external_urls", {}).get("spotify"),
                 "duration_ms": t.get("duration_ms"),
+                "thumb": (t.get("album", {}).get("images") or [{}])[0].get("url"),
             })
         return out
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Spotify search: {e}")
         return []
 
 
-async def _search_itunes(query: str, limit: int = 8) -> List[dict]:
+async def resolve_spotify_url(url: str) -> Optional[dict]:
     try:
         async with shared_session() as s:
             async with s.get(
-                ITUNES_SEARCH_URL,
-                params={"term": query, "media": "music", "entity": "song",
-                        "limit": limit},
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as r:
+                f"https://open.spotify.com/oembed?url={url}",
+                timeout=aiohttp.ClientTimeout(total=8)) as r:
                 if r.status != 200:
-                    return []
+                    return None
                 d = await r.json()
-        out = []
-        for t in d.get("results", []):
-            out.append({
-                "title": t.get("trackName", "?"),
-                "artist": t.get("artistName", "?"),
-                "source": "itunes",
-                "preview_url": t.get("previewUrl"),
-                "url": t.get("trackViewUrl"),
-                "duration_ms": t.get("trackTimeMillis"),
-            })
-        return out
+        title = (d.get("title") or "").strip()
+        if not title:
+            return None
+        if " · " in title:
+            t, a = title.split(" · ", 1)
+            return {"title": t.strip(), "artist": a.strip()}
+        return {"title": title, "artist": ""}
     except Exception:
-        return []
+        return None
 
 
-async def search_music(query: str, limit: int = 8) -> List[dict]:
-    if SPOTIFY_CLIENT_ID:
-        sp = await _search_spotify(query, limit)
-        if sp:
-            it = await _search_itunes(query, limit)
-            for r in sp:
-                if r.get("preview_url"):
-                    continue
-                for c in it:
-                    if (c["title"].lower() in r["title"].lower()
-                            or r["title"].lower() in c["title"].lower()):
-                        r["preview_url"] = c.get("preview_url")
-                        break
-            return sp
-    return await _search_itunes(query, limit)
+async def search_music_full(query: str, limit: int = 10) -> List[dict]:
+    # Direct Spotify URL
+    sp = re.search(
+        r'https?://open\.spotify\.com/(?:intl-\w+/)?(track|album|playlist)/(\w+)',
+        query.strip())
+    if sp:
+        kind, sid = sp.group(1), sp.group(2)
+        if kind != "track":
+            return []
+        canonical = f"https://open.spotify.com/{kind}/{sid}"
+        meta = await resolve_spotify_url(canonical)
+        if not meta:
+            return []
+        text_q = f"{meta['title']} {meta['artist']}".strip()
+        entries = await yt_search(text_q, limit=5)
+        tracks = []
+        for e in entries:
+            t = _yt_entry_to_track(e, {**meta, "source": "spotify"})
+            if t:
+                tracks.append(t)
+        return tracks
+
+    spotify_hits: List[dict] = []
+    if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
+        spotify_hits = await spotify_search_tracks(query, limit=limit)
+
+    yt_entries = await yt_search(query, limit=limit)
+    yt_tracks = []
+    for e in yt_entries:
+        t = _yt_entry_to_track(e)
+        if t:
+            yt_tracks.append(t)
+
+    if spotify_hits and yt_tracks:
+        merged = []
+        for sp_track in spotify_hits:
+            key = sp_track["title"].lower()[:40]
+            match = None
+            for yt in yt_tracks:
+                yk = yt["title"].lower()[:40]
+                if key and (key in yk or yk in key):
+                    match = yt
+                    break
+            if match:
+                merged.append({
+                    "title": sp_track["title"],
+                    "artist": sp_track["artist"],
+                    "source": "spotify",
+                    "stream_url": match["stream_url"],
+                    "url": sp_track["url"],
+                    "duration_ms": sp_track["duration_ms"] or match["duration_ms"],
+                    "thumb": sp_track.get("thumb") or match.get("thumb"),
+                })
+        if merged:
+            return merged[:limit]
+
+    return yt_tracks[:limit]
 
 
+# ---------- Music session state ----------
 class MusicSession:
     __slots__ = ("guild_id", "text_channel_id", "voice_client",
-                 "queue", "current", "loop_mode")
+                 "queue", "current", "loop_mode", "volume")
 
     def __init__(self, guild_id: int):
         self.guild_id = guild_id
@@ -3799,6 +4096,7 @@ class MusicSession:
         self.queue: List[dict] = []
         self.current: Optional[dict] = None
         self.loop_mode: str = "off"
+        self.volume: float = 1.0
 
 
 def _get_music_session(guild_id: int) -> MusicSession:
@@ -3808,36 +4106,54 @@ def _get_music_session(guild_id: int) -> MusicSession:
 
 
 def _loop_label(mode: str) -> str:
-    return {"off": "➡️ Off", "track": "🔂 Loop track",
-            "queue": "🔁 Loop queue", "24_7": "♾️ 24/7"}.get(mode, "➡️ Off")
+    return {"off": "➡️ Off", "track": "🔂 Track",
+            "queue": "🔁 Queue", "24_7": "♾️ 24/7"}.get(mode, "➡️ Off")
+
+
+def _fmt_duration(ms: Optional[int]) -> str:
+    if not ms:
+        return ""
+    secs = ms // 1000
+    h, r = divmod(secs, 3600)
+    m, s = divmod(r, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
 
 
 def _music_panel_embed(session: MusicSession) -> discord.Embed:
     emb = discord.Embed(title="🎵 Music Panel", color=C_PRIMARY)
     cur = session.current
     if cur:
-        emb.add_field(name="Now playing",
-                      value=f"**{cur['title']}** — {cur['artist']}\n*{cur['source']}*",
-                      inline=False)
+        emb.add_field(
+            name="Now playing",
+            value=f"**{cur['title']}**\n{cur['artist']}\n*{cur.get('source','?')}*",
+            inline=False)
     else:
         emb.add_field(name="Now playing", value="*(nothing)*", inline=False)
+
     if session.queue:
-        lines = [f"{i}. **{t['title']}** — {t['artist']}"
-                 for i, t in enumerate(session.queue[:5], 1)]
+        lines = []
+        for i, t in enumerate(session.queue[:5], 1):
+            dur = _fmt_duration(t.get("duration_ms"))
+            lines.append(f"{i}. **{t['title'][:55]}** — {t['artist'][:30]}"
+                         + (f" · `{dur}`" if dur else ""))
         if len(session.queue) > 5:
             lines.append(f"…and {len(session.queue) - 5} more")
         emb.add_field(name=f"Queue ({len(session.queue)})",
                       value="\n".join(lines), inline=False)
-    emb.add_field(name="Loop mode", value=_loop_label(session.loop_mode), inline=True)
+
+    emb.add_field(name="Loop", value=_loop_label(session.loop_mode), inline=True)
+    emb.add_field(name="Volume", value=f"{int(session.volume * 100)}%", inline=True)
     emb.add_field(name="Voice",
-                  value="✅" if _VOICE_LIB_OK else "❌ (no PyNaCl)", inline=True)
-    emb.set_footer(text="Press 🔎 Search to queue a track by name")
+                  value="✅" if _VOICE_LIB_OK else "❌ (missing libs)", inline=True)
+    emb.set_footer(text="🔎 Search · ⏯️ Pause · ⏭️ Skip · ⏹️ Stop · 🔁 Loop · 👋 Leave")
     return emb
 
 
 async def _ensure_voice(interaction: discord.Interaction, session: MusicSession):
     if not _VOICE_LIB_OK:
-        raise Exception("PyNaCl not installed — voice disabled")
+        raise Exception("Voice libs missing (PyNaCl / davey)")
     vc = session.voice_client
     if vc and vc.is_connected():
         return
@@ -3864,7 +4180,8 @@ def _play_next(guild_id: int):
     else:
         session.current = None
         return
-    if not next_track or not next_track.get("preview_url"):
+
+    if not next_track or not next_track.get("stream_url"):
         return _play_next(guild_id)
     session.current = next_track
 
@@ -3878,30 +4195,239 @@ def _play_next(guild_id: int):
 
     try:
         source = discord.FFmpegPCMAudio(
-            next_track["preview_url"],
-            before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+            next_track["stream_url"],
+            before_options=("-reconnect 1 -reconnect_streamed 1 "
+                            "-reconnect_delay_max 5 -nostdin"),
             options="-vn")
+        if session.volume != 1.0:
+            source = discord.PCMVolumeTransformer(source, volume=session.volume)
         vc.play(source, after=_after)
     except Exception as e:
         logger.error(f"Play failed: {e}")
         session.current = None
+        _play_next(guild_id)
 
 
+# ---------- Autocomplete (live dropdown) ----------
+_ac_cache: Dict[int, dict] = {}
+
+
+async def _play_ac(interaction: discord.Interaction,
+                   current: str) -> List[app_commands.Choice[str]]:
+    uid = interaction.user.id
+    raw = (current or "").strip()
+
+    if raw.startswith(("http://", "https://", "spotify:")):
+        return [app_commands.Choice(
+            name=f"🔗 Use this link: {raw[:80]}",
+            value=f"__url__|{raw[:300]}")]
+
+    if len(raw) < 2:
+        return [app_commands.Choice(
+            name="Keep typing… (min 2 chars)",
+            value="__hint__|")]
+
+    key = raw.lower()
+    cached = _ac_cache.get(uid)
+    if cached and cached.get("q") == key and time.time() - cached.get("t", 0) < 60:
+        results = cached.get("r", [])
+    else:
+        try:
+            results = await search_music_full(raw, limit=12)
+        except Exception as e:
+            logger.warning(f"AC search failed: {e}")
+            results = []
+        _ac_cache[uid] = {"q": key, "r": results, "t": time.time()}
+
+    if not results:
+        return [app_commands.Choice(
+            name=f"No results for '{raw[:80]}'",
+            value=f"__raw__|{raw[:300]}")]
+
+    out: List[app_commands.Choice[str]] = []
+    for i, r in enumerate(results[:25]):
+        icon = "🎧" if r.get("source") == "spotify" else "▶️"
+        dur = _fmt_duration(r.get("duration_ms"))
+        label = f"{icon} {r['title'][:55]} - {r['artist'][:35]}"
+        if dur:
+            label += f" - {dur}"
+        out.append(app_commands.Choice(name=label[:100], value=f"__idx__|{i}"))
+    return out
+
+
+# ---------- /play ----------
+@bot.hybrid_command(
+    name="play",
+    description="🎶 Play a full song by name or Spotify link (live search dropdown)")
+@app_commands.autocomplete(query=_play_ac)
+@app_commands.describe(query="Song name, artist, or Spotify track URL")
+async def play_cmd(ctx: commands.Context, query: str):
+    if not ctx.guild:
+        return await ctx.send("Servers only.", ephemeral=True)
+
+    await ctx.defer()
+
+    if query.startswith("__hint__|"):
+        return await ctx.send("❌ Start typing a song name.", ephemeral=True)
+
+    session = _get_music_session(ctx.guild.id)
+    session.text_channel_id = ctx.channel.id
+
+    track: Optional[dict] = None
+    search_term: Optional[str] = None
+
+    if query.startswith("__url__|"):
+        url = query[8:]
+        if "open.spotify.com" in url:
+            results = await search_music_full(url, limit=5)
+            if not results:
+                return await ctx.send("❌ Couldn't resolve that Spotify link.")
+            track = results[0]
+        elif url.lower().endswith((".mp3", ".m4a", ".ogg", ".opus", ".wav")):
+            track = {
+                "title": url.rsplit("/", 1)[-1][:60] or "Direct link",
+                "artist": "direct", "source": "direct",
+                "stream_url": url, "url": url, "duration_ms": None,
+            }
+        else:
+            search_term = url
+
+    elif query.startswith("__idx__|"):
+        try:
+            idx = int(query[7:])
+        except ValueError:
+            return await ctx.send("❌ Invalid selection.")
+        cached = _ac_cache.get(ctx.author.id) or {}
+        results = cached.get("r", [])
+        if idx >= len(results):
+            return await ctx.send("❌ Selection expired. Search again.")
+        track = results[idx]
+
+    elif query.startswith("__raw__|"):
+        search_term = query[8:]
+    else:
+        search_term = query.strip()
+
+    if track is None:
+        if not search_term:
+            return await ctx.send("❌ Nothing to search.")
+        results = await search_music_full(search_term, limit=10)
+        if not results:
+            return await ctx.send(f"❌ No results for `{search_term}`.")
+
+        bot._pending_searches[ctx.author.id] = results
+        emb = discord.Embed(
+            title=f"🔎 Results for: {search_term[:100]}",
+            description="Select a track below.",
+            color=C_PRIMARY)
+        lines = []
+        for i, r in enumerate(results[:10], 1):
+            icon = "🎧" if r.get("source") == "spotify" else "▶️"
+            dur = _fmt_duration(r.get("duration_ms"))
+            lines.append(f"{i}. {icon} **{r['title'][:55]}** — {r['artist'][:40]}"
+                         + (f" · `{dur}`" if dur else ""))
+        emb.add_field(name="Results", value="\n".join(lines) or "—", inline=False)
+        return await ctx.send(embed=emb,
+                              view=_PlaySelectView(ctx.author.id, results))
+
+    if not track.get("stream_url"):
+        return await ctx.send(
+            f"⚠️ **{track['title']}** has no playable stream.")
+
+    session.queue.append(track)
+
+    if not session.voice_client or not session.voice_client.is_connected():
+        if ctx.author.voice and ctx.author.voice.channel and _VOICE_LIB_OK:
+            try:
+                session.voice_client = await ctx.author.voice.channel.connect()
+            except Exception as e:
+                session.queue.pop()
+                return await ctx.send(f"❌ Couldn't join VC: {e}")
+        else:
+            session.queue.pop()
+            return await ctx.send("❌ Join a voice channel first.")
+
+    emb = discord.Embed(title="➕ Queued",
+                        description=f"**{track['title']}**\n{track['artist']}",
+                        color=C_OK)
+    if track.get("duration_ms"):
+        emb.add_field(name="Duration", value=_fmt_duration(track["duration_ms"]),
+                      inline=True)
+    emb.add_field(name="Source", value=track.get("source", "?"), inline=True)
+    if track.get("url"):
+        emb.add_field(name="Link", value=f"[open]({track['url']})", inline=True)
+    if track.get("thumb"):
+        emb.set_thumbnail(url=track["thumb"])
+    await ctx.send(embed=emb)
+
+    if session.voice_client and not session.voice_client.is_playing():
+        _play_next(ctx.guild.id)
+
+
+# ---------- Select-view fallback ----------
+class _PlaySelectView(discord.ui.View):
+    def __init__(self, user_id: int, results: List[dict]):
+        super().__init__(timeout=180)
+        self.user_id = user_id
+        self.results = results
+        self.add_item(_PlayResultSelect(user_id, results))
+
+
+class _PlayResultSelect(discord.ui.Select):
+    def __init__(self, user_id: int, results: List[dict]):
+        self.user_id = user_id
+        self.results = results
+        opts = []
+        for i, r in enumerate(results[:25]):
+            icon = "🎧" if r.get("source") == "spotify" else "▶️"
+            dur = _fmt_duration(r.get("duration_ms"))
+            desc = r["artist"][:80]
+            if dur:
+                desc = f"{desc} · {dur}"
+            opts.append(discord.SelectOption(
+                label=f"{icon} {r['title'][:60]}",
+                description=desc[:100],
+                value=str(i)))
+        super().__init__(placeholder="Choose a track…",
+                         min_values=1, max_values=1, options=opts)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message(
+                "❌ Not your search.", ephemeral=True)
+        track = self.results[int(self.values[0])]
+        if not track.get("stream_url"):
+            return await interaction.response.send_message(
+                "⚠️ No stream URL for this track.", ephemeral=True)
+
+        session = _get_music_session(interaction.guild.id)
+        session.queue.append(track)
+        try:
+            await _ensure_voice(interaction, session)
+        except Exception as e:
+            session.queue.pop()
+            return await interaction.response.send_message(
+                f"❌ Couldn't join voice: {e}", ephemeral=True)
+        await interaction.response.send_message(
+            f"➕ Queued **{track['title']}** — {track['artist']}", ephemeral=True)
+        if session.voice_client and not session.voice_client.is_playing():
+            _play_next(interaction.guild.id)
+
+
+# ---------- /music panel ----------
 class _MusicSearchModal(discord.ui.Modal, title="🔎 Search a song"):
-    query = discord.ui.TextInput(
-        label="Song name (or 'artist - song')",
-        placeholder="e.g. Bohemian Rhapsody",
-        required=True, max_length=120)
+    q = discord.ui.TextInput(label="Song name", required=True, max_length=120)
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        results = await search_music(self.query.value.strip(), limit=8)
+        results = await search_music_full(self.q.value.strip(), limit=10)
         if not results:
             return await interaction.followup.send("❌ No results.", ephemeral=True)
         bot._pending_searches[interaction.user.id] = results
-        await interaction.followup.send("**Pick a track:**",
-                                        view=_MusicSelectView(interaction.user.id),
-                                        ephemeral=True)
+        await interaction.followup.send(
+            "**Pick a track:**",
+            view=_MusicSelectView(interaction.user.id),
+            ephemeral=True)
 
 
 class _MusicSelectView(discord.ui.View):
@@ -3917,27 +4443,26 @@ class _MusicResultSelect(discord.ui.Select):
         self.user_id = user_id
         self.results = results
         super().__init__(
-            placeholder="Choose a track…",
-            min_values=1, max_values=1,
+            placeholder="Choose a track…", min_values=1, max_values=1,
             options=[discord.SelectOption(
-                label=f"{'▶️' if r.get('preview_url') else '🚫'} {r['title'][:60]}",
+                label=f"{'🎧' if r.get('source')=='spotify' else '▶️'} {r['title'][:60]}",
                 description=f"{r['artist'][:80]}"[:100],
                 value=str(i)) for i, r in enumerate(results[:25])])
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("❌ Not your search.",
-                                                            ephemeral=True)
-        track = self.results[int(self.values[0])]
-        if not track.get("preview_url"):
             return await interaction.response.send_message(
-                "⚠️ No playable preview for this. Try another.", ephemeral=True)
+                "❌ Not your search.", ephemeral=True)
+        track = self.results[int(self.values[0])]
+        if not track.get("stream_url"):
+            return await interaction.response.send_message(
+                "⚠️ No stream URL.", ephemeral=True)
         session = _get_music_session(interaction.guild.id)
         session.queue.append(track)
-        session.text_channel_id = interaction.channel.id
         try:
             await _ensure_voice(interaction, session)
         except Exception as e:
+            session.queue.pop()
             return await interaction.response.send_message(
                 f"❌ Couldn't join voice: {e}", ephemeral=True)
         await interaction.response.send_message(
@@ -3951,16 +4476,19 @@ class _MusicPanelView(discord.ui.View):
         super().__init__(timeout=None)
         self.guild_id = guild_id
 
-    @discord.ui.button(label="Search", emoji="🔎", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Search", emoji="🔎",
+                       style=discord.ButtonStyle.primary, row=0)
     async def search_btn(self, interaction, button):
         await interaction.response.send_modal(_MusicSearchModal())
 
-    @discord.ui.button(label="Play/Pause", emoji="⏯️", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Play/Pause", emoji="⏯️",
+                       style=discord.ButtonStyle.secondary, row=0)
     async def pp_btn(self, interaction, button):
-        session = _get_music_session(interaction.guild.id)
-        vc = session.voice_client
+        s = _get_music_session(interaction.guild.id)
+        vc = s.voice_client
         if not vc or not vc.is_connected():
-            return await interaction.response.send_message("❌ Not connected.", ephemeral=True)
+            return await interaction.response.send_message("❌ Not connected.",
+                                                            ephemeral=True)
         if vc.is_playing():
             vc.pause()
             await interaction.response.send_message("⏸️ Paused.", ephemeral=True)
@@ -3968,71 +4496,132 @@ class _MusicPanelView(discord.ui.View):
             vc.resume()
             await interaction.response.send_message("▶️ Resumed.", ephemeral=True)
         else:
-            if session.queue or session.current:
+            if s.queue or s.current:
                 _play_next(interaction.guild.id)
             await interaction.response.send_message("▶️ Playing.", ephemeral=True)
 
-    @discord.ui.button(label="Skip", emoji="⏭️", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Skip", emoji="⏭️",
+                       style=discord.ButtonStyle.secondary, row=0)
     async def skip_btn(self, interaction, button):
-        session = _get_music_session(interaction.guild.id)
-        vc = session.voice_client
+        s = _get_music_session(interaction.guild.id)
+        vc = s.voice_client
         if vc and (vc.is_playing() or vc.is_paused()):
-            if session.loop_mode == "track":
-                session.loop_mode = "off"
+            if s.loop_mode == "track":
+                s.loop_mode = "off"
             vc.stop()
             await interaction.response.send_message("⏭️ Skipped.", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ Nothing playing.", ephemeral=True)
+            await interaction.response.send_message("❌ Nothing playing.",
+                                                    ephemeral=True)
 
-    @discord.ui.button(label="Stop", emoji="⏹️", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="Stop", emoji="⏹️",
+                       style=discord.ButtonStyle.danger, row=0)
     async def stop_btn(self, interaction, button):
-        session = _get_music_session(interaction.guild.id)
-        session.queue.clear()
-        session.current = None
-        session.loop_mode = "off"
-        vc = session.voice_client
+        s = _get_music_session(interaction.guild.id)
+        s.queue.clear()
+        s.current = None
+        s.loop_mode = "off"
+        vc = s.voice_client
         if vc and (vc.is_playing() or vc.is_paused()):
             vc.stop()
-        await interaction.response.edit_message(embed=_music_panel_embed(session), view=self)
+        await interaction.response.edit_message(
+            embed=_music_panel_embed(s), view=self)
 
-    @discord.ui.button(label="Loop mode", emoji="🔁", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Loop", emoji="🔁",
+                       style=discord.ButtonStyle.secondary, row=1)
     async def loop_btn(self, interaction, button):
-        session = _get_music_session(interaction.guild.id)
+        s = _get_music_session(interaction.guild.id)
         order = ["off", "track", "queue", "24_7"]
-        session.loop_mode = order[(order.index(session.loop_mode) + 1) % len(order)]
-        await interaction.response.edit_message(embed=_music_panel_embed(session), view=self)
+        s.loop_mode = order[(order.index(s.loop_mode) + 1) % len(order)]
+        await interaction.response.edit_message(embed=_music_panel_embed(s), view=self)
 
-    @discord.ui.button(label="Queue", emoji="📜", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Vol -", emoji="🔉",
+                       style=discord.ButtonStyle.secondary, row=1)
+    async def vol_down(self, interaction, button):
+        s = _get_music_session(interaction.guild.id)
+        s.volume = max(0.1, round(s.volume - 0.1, 1))
+        if s.voice_client and s.voice_client.source:
+            try:
+                s.voice_client.source.volume = s.volume
+            except Exception:
+                pass
+        await interaction.response.edit_message(embed=_music_panel_embed(s), view=self)
+
+    @discord.ui.button(label="Vol +", emoji="🔊",
+                       style=discord.ButtonStyle.secondary, row=1)
+    async def vol_up(self, interaction, button):
+        s = _get_music_session(interaction.guild.id)
+        s.volume = min(2.0, round(s.volume + 0.1, 1))
+        if s.voice_client and s.voice_client.source:
+            try:
+                s.voice_client.source.volume = s.volume
+            except Exception:
+                pass
+        await interaction.response.edit_message(embed=_music_panel_embed(s), view=self)
+
+    @discord.ui.button(label="Queue", emoji="📜",
+                       style=discord.ButtonStyle.secondary, row=1)
     async def queue_btn(self, interaction, button):
-        session = _get_music_session(interaction.guild.id)
-        await interaction.response.send_message(embed=_music_panel_embed(session),
+        s = _get_music_session(interaction.guild.id)
+        await interaction.response.send_message(embed=_music_panel_embed(s),
                                                 ephemeral=True)
 
-    @discord.ui.button(label="Leave VC", emoji="👋", style=discord.ButtonStyle.danger, row=1)
+    @discord.ui.button(label="Join My VC", emoji="🔊",
+                       style=discord.ButtonStyle.success, row=2)
+    async def join_btn(self, interaction, button):
+        member = interaction.user
+        if not member.voice or not member.voice.channel:
+            return await interaction.response.send_message("❌ Not in a VC.",
+                                                            ephemeral=True)
+        if not _VOICE_LIB_OK:
+            return await interaction.response.send_message("❌ Voice libs missing.",
+                                                            ephemeral=True)
+        s = _get_music_session(interaction.guild.id)
+        vc = s.voice_client
+        if vc and vc.is_connected():
+            if vc.channel.id == member.voice.channel.id:
+                return await interaction.response.send_message("✅ Already there.",
+                                                                ephemeral=True)
+            await vc.move_to(member.voice.channel)
+            return await interaction.response.send_message(
+                f"🔊 Moved to **{member.voice.channel.name}**.", ephemeral=True)
+        try:
+            s.voice_client = await member.voice.channel.connect()
+            await interaction.response.send_message(
+                f"🔊 Joined **{member.voice.channel.name}**.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Join failed: {e}",
+                                                    ephemeral=True)
+
+    @discord.ui.button(label="Leave VC", emoji="👋",
+                       style=discord.ButtonStyle.danger, row=2)
     async def leave_btn(self, interaction, button):
-        session = _get_music_session(interaction.guild.id)
-        session.queue.clear()
-        session.current = None
-        vc = session.voice_client
+        s = _get_music_session(interaction.guild.id)
+        s.queue.clear()
+        s.current = None
+        vc = s.voice_client
         if vc and vc.is_connected():
             await vc.disconnect()
-        session.voice_client = None
+        s.voice_client = None
         await interaction.response.send_message("👋 Left voice.", ephemeral=True)
 
 
 @bot.hybrid_command(name="music",
-                    description="🎵 Music panel — search, queue, play in VC")
+                    description="🎵 Music panel — search, queue, loop, join/leave VC")
 async def music_panel_cmd(ctx):
     if not ctx.guild:
         return await ctx.send("Servers only.", ephemeral=True)
+
     session = _get_music_session(ctx.guild.id)
     session.text_channel_id = ctx.channel.id
+
     if not session.voice_client or not session.voice_client.is_connected():
         if ctx.author.voice and ctx.author.voice.channel and _VOICE_LIB_OK:
             try:
                 session.voice_client = await ctx.author.voice.channel.connect()
             except Exception as e:
                 logger.warning(f"Auto-join failed: {e}")
+
     await ctx.send(embed=_music_panel_embed(session),
                    view=_MusicPanelView(ctx.guild.id))
 
@@ -4091,7 +4680,7 @@ async def persistent_reset(ctx, target_user: discord.User):
 
 
 # ======================================================================
-# COURT — fully button-based
+# COURT — button panel
 # ======================================================================
 class CourtRoleView(discord.ui.View):
     def __init__(self, bot_instance):
@@ -4133,8 +4722,9 @@ class CourtCaseModal(discord.ui.Modal, title="📝 Explain the Case"):
         required=True, max_length=800)
 
     async def on_submit(self, interaction: discord.Interaction):
-        s = bot.court_sessions.setdefault(interaction.user.id,
-                                          {"role": "judge", "case": "", "participants": {}})
+        s = bot.court_sessions.setdefault(
+            interaction.user.id,
+            {"role": "judge", "case": "", "participants": {}})
         s["case"] = self.case_text.value.strip()
         await interaction.response.send_message(
             "✅ Case recorded. Click **▶️ Start** to begin.", ephemeral=True)
@@ -4157,10 +4747,12 @@ class CourtParticipantModal(discord.ui.Modal, title="👥 Add Participant"):
         if r not in valid:
             return await interaction.response.send_message(
                 f"❌ Role: {', '.join(valid)}", ephemeral=True)
-        s = bot.court_sessions.setdefault(interaction.user.id,
-                                          {"role": "judge", "case": "", "participants": {}})
+        s = bot.court_sessions.setdefault(
+            interaction.user.id,
+            {"role": "judge", "case": "", "participants": {}})
         s["participants"][r] = uid
-        await interaction.response.send_message(f"✅ <@{uid}> → **{r}**", ephemeral=True)
+        await interaction.response.send_message(f"✅ <@{uid}> → **{r}**",
+                                                ephemeral=True)
 
 
 class CourtPanelView(discord.ui.View):
@@ -4168,26 +4760,32 @@ class CourtPanelView(discord.ui.View):
         super().__init__(timeout=300)
         self.bot = bot_instance
 
-    @discord.ui.button(label="Explain Case", emoji="📝", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Explain Case", emoji="📝",
+                       style=discord.ButtonStyle.primary, row=0)
     async def explain_btn(self, i, b):
         if i.user.id not in bot.court_sessions:
-            return await i.response.send_message("❌ Pick a role first.", ephemeral=True)
+            return await i.response.send_message("❌ Pick a role first.",
+                                                 ephemeral=True)
         await i.response.send_modal(CourtCaseModal())
 
-    @discord.ui.button(label="Add Participant", emoji="👥", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Add Participant", emoji="👥",
+                       style=discord.ButtonStyle.secondary, row=0)
     async def add_btn(self, i, b):
         if i.user.id not in bot.court_sessions:
-            return await i.response.send_message("❌ Pick a role first.", ephemeral=True)
+            return await i.response.send_message("❌ Pick a role first.",
+                                                 ephemeral=True)
         await i.response.send_modal(CourtParticipantModal())
 
-    @discord.ui.button(label="Start", emoji="▶️", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Start", emoji="▶️",
+                       style=discord.ButtonStyle.success, row=0)
     async def start_btn(self, i, b):
         s = bot.court_sessions.get(i.user.id)
         if not s:
-            return await i.response.send_message("❌ Pick a role first.", ephemeral=True)
+            return await i.response.send_message("❌ Pick a role first.",
+                                                 ephemeral=True)
         if not s.get("case"):
-            return await i.response.send_message(
-                "❌ Use 📝 Explain Case first.", ephemeral=True)
+            return await i.response.send_message("❌ Use 📝 Explain Case first.",
+                                                 ephemeral=True)
         p = s.get("participants", {})
         if p:
             out = "🏛️ **Court in session!**\n"
@@ -4198,12 +4796,14 @@ class CourtPanelView(discord.ui.View):
             await i.response.send_message("🏛️ Court in session (no other participants).")
         await i.channel.send("Begin.")
 
-    @discord.ui.button(label="Change Role", emoji="🎭", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Change Role", emoji="🎭",
+                       style=discord.ButtonStyle.secondary, row=0)
     async def change_btn(self, i, b):
         await i.response.edit_message(content="🏛️ Pick your new role:",
                                       view=CourtRoleView(bot))
 
-    @discord.ui.button(label="End", emoji="🏁", style=discord.ButtonStyle.danger, row=1)
+    @discord.ui.button(label="End", emoji="🏁",
+                       style=discord.ButtonStyle.danger, row=1)
     async def end_btn(self, i, b):
         if i.user.id in bot.court_sessions:
             bot.court_sessions.pop(i.user.id, None)
@@ -4216,10 +4816,11 @@ async def court_cmd(ctx):
 
 
 # ======================================================================
-# UMF — per-guild, button-based
+# UMF — per-guild, button panel with admin gate
 # ======================================================================
 class UMFRecognitionModal(discord.ui.Modal, title="🌍 UMF Recognition Request"):
-    nation_name = discord.ui.TextInput(label="Nation Name", required=True, max_length=100)
+    nation_name = discord.ui.TextInput(label="Nation Name",
+                                       required=True, max_length=100)
     additional = discord.ui.TextInput(label="Additional Info (optional)",
                                       required=False, max_length=500,
                                       style=discord.TextStyle.paragraph)
@@ -4236,16 +4837,19 @@ class UMFRecognitionModal(discord.ui.Modal, title="🌍 UMF Recognition Request"
                 "⏳ You already have a pending request.", ephemeral=True)
         bot.umf_data.add_pending_request(guild_id, interaction.user.id, nation,
                                          interaction.user.display_name)
-        bot.umf_data.add_to_history(guild_id, "REQUEST_SUBMITTED",
-                                    interaction.user.id, interaction.user.display_name,
-                                    nation, f"Additional: {self.additional.value or 'None'}")
+        bot.umf_data.add_to_history(
+            guild_id, "REQUEST_SUBMITTED",
+            interaction.user.id, interaction.user.display_name,
+            nation, f"Additional: {self.additional.value or 'None'}")
         emb = discord.Embed(title="✅ Request Submitted",
-                            description=f"**{nation}** is pending review.", color=C_OK)
+                            description=f"**{nation}** is pending review.",
+                            color=C_OK)
         await interaction.response.send_message(embed=emb, ephemeral=True)
 
 
 class UMFDenyModal(discord.ui.Modal, title="❌ Deny Request"):
-    reason = discord.ui.TextInput(label="Reason", required=True, max_length=200,
+    reason = discord.ui.TextInput(label="Reason", required=True,
+                                  max_length=200,
                                   style=discord.TextStyle.paragraph)
 
     def __init__(self, req, user):
@@ -4255,10 +4859,12 @@ class UMFDenyModal(discord.ui.Modal, title="❌ Deny Request"):
 
     async def on_submit(self, interaction):
         guild_id = interaction.guild.id if interaction.guild else None
-        bot.umf_data.deny_request(guild_id, self.req["user_id"], self.reason.value.strip())
-        bot.umf_data.add_to_history(guild_id, "DENIED", self.req["user_id"],
-                                    self.req["username"], self.req["nation"],
-                                    f"Reason: {self.reason.value.strip()}")
+        bot.umf_data.deny_request(guild_id, self.req["user_id"],
+                                  self.reason.value.strip())
+        bot.umf_data.add_to_history(
+            guild_id, "DENIED", self.req["user_id"],
+            self.req["username"], self.req["nation"],
+            f"Reason: {self.reason.value.strip()}")
         await interaction.response.edit_message(content="❌ Denied.", view=None)
         try:
             await self.user.send(
@@ -4269,36 +4875,42 @@ class UMFDenyModal(discord.ui.Modal, title="❌ Deny Request"):
 
 
 class UMFAdminPanel(discord.ui.View):
-    """Admin-only panel — manages pending requests."""
-
     def __init__(self, bot_instance):
         super().__init__(timeout=300)
         self.bot = bot_instance
 
-    @discord.ui.button(label="📋 Next Pending", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Next Pending", style=discord.ButtonStyle.primary,
+                       emoji="📋", row=0)
     async def next_btn(self, i, b):
         if not i.user.guild_permissions.administrator:
             return await i.response.send_message("⛔ Admin only.", ephemeral=True)
         guild_id = i.guild.id if i.guild else None
         pending = self.bot.umf_data.get_pending_requests(guild_id)
         if not pending:
-            return await i.response.send_message("📭 No pending requests.", ephemeral=True)
+            return await i.response.send_message("📭 No pending requests.",
+                                                 ephemeral=True)
         req = pending[0]
         try:
-            user = i.guild.get_member(req["user_id"]) or await i.guild.fetch_member(req["user_id"])
+            user = (i.guild.get_member(req["user_id"])
+                    or await i.guild.fetch_member(req["user_id"]))
         except Exception:
             user = None
         emb = discord.Embed(title="📋 Pending Request", color=C_WARM)
         emb.add_field(name="👤 Applicant",
-                      value=user.mention if user else f"<@{req['user_id']}>", inline=True)
+                      value=user.mention if user else f"<@{req['user_id']}>",
+                      inline=True)
         emb.add_field(name="🌍 Nation", value=req["nation"], inline=True)
         emb.add_field(name="📅 Submitted",
-                      value=datetime.fromisoformat(req["timestamp"]).strftime("%b %d, %H:%M"),
+                      value=datetime.fromisoformat(req["timestamp"]).strftime(
+                          "%b %d, %H:%M"),
                       inline=True)
-        emb.add_field(name="📊 Total Pending", value=str(len(pending)), inline=True)
-        await i.response.edit_message(embed=emb, view=UMFAdminActionView(req, user))
+        emb.add_field(name="📊 Total Pending", value=str(len(pending)),
+                      inline=True)
+        await i.response.edit_message(embed=emb,
+                                      view=UMFAdminActionView(req, user))
 
-    @discord.ui.button(label="📊 Stats", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Stats", style=discord.ButtonStyle.secondary,
+                       emoji="📊", row=0)
     async def stats_btn(self, i, b):
         guild_id = i.guild.id if i.guild else None
         st = self.bot.umf_data.get_stats(guild_id)
@@ -4310,11 +4922,13 @@ class UMFAdminPanel(discord.ui.View):
         emb.add_field(name="History", value=str(st["history"]), inline=True)
         await i.response.send_message(embed=emb, ephemeral=True)
 
-    @discord.ui.button(label="🌍 All Nations", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="All Nations", style=discord.ButtonStyle.secondary,
+                       emoji="🌍", row=0)
     async def list_btn(self, i, b):
         guild_id = i.guild.id if i.guild else None
         nations = self.bot.umf_data.get_recognized_nations(guild_id)
-        emb = discord.Embed(title="🌍 Recognized Nations (this server)", color=C_ACCENT)
+        emb = discord.Embed(title="🌍 Recognized Nations (this server)",
+                            color=C_ACCENT)
         if nations:
             emb.description = "```\n" + "\n".join(f"• {n}" for n in nations[:25]) + "\n```"
         else:
@@ -4328,51 +4942,55 @@ class UMFAdminActionView(discord.ui.View):
         self.req = req
         self.user = user
 
-    @discord.ui.button(label="✅ Approve", style=discord.ButtonStyle.success, emoji="✅")
+    @discord.ui.button(label="Approve", style=discord.ButtonStyle.success,
+                       emoji="✅")
     async def approve_btn(self, i, b):
         if not i.user.guild_permissions.administrator:
             return await i.response.send_message("⛔ Admin only.", ephemeral=True)
         guild_id = i.guild.id if i.guild else None
         approved = bot.umf_data.approve_request(guild_id, self.req["user_id"])
         if not approved:
-            return await i.response.edit_message(content="❌ Already processed.", view=None)
+            return await i.response.edit_message(content="❌ Already processed.",
+                                                 view=None)
         bot.umf_data.add_recognized_nation(guild_id, approved["nation"])
-        bot.umf_data.add_to_history(guild_id, "APPROVED", approved["user_id"],
-                                    approved["username"], approved["nation"],
-                                    f"By {i.user}")
+        bot.umf_data.add_to_history(
+            guild_id, "APPROVED", approved["user_id"],
+            approved["username"], approved["nation"], f"By {i.user}")
         await i.response.edit_message(
             content=f"✅ **{approved['nation']}** recognized.", view=None)
         try:
-            await self.user.send(f"🎉 Your nation **{approved['nation']}** is now "
-                                 f"recognized by the UMF (in {i.guild.name}).")
+            await self.user.send(
+                f"🎉 Your nation **{approved['nation']}** is now recognized "
+                f"by the UMF (in {i.guild.name}).")
         except Exception:
             pass
 
-    @discord.ui.button(label="❌ Deny", style=discord.ButtonStyle.danger, emoji="❌")
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger,
+                       emoji="❌")
     async def deny_btn(self, i, b):
         if not i.user.guild_permissions.administrator:
             return await i.response.send_message("⛔ Admin only.", ephemeral=True)
         await i.response.send_modal(UMFDenyModal(self.req, self.user))
 
-    @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, emoji="⏭️")
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.secondary,
+                       emoji="⏭️")
     async def skip_btn(self, i, b):
         if not i.user.guild_permissions.administrator:
             return await i.response.send_message("⛔ Admin only.", ephemeral=True)
-        await i.response.edit_message(content="⏭️ Skipped.", view=UMFAdminPanel(bot))
+        await i.response.edit_message(content="⏭️ Skipped.",
+                                      view=UMFAdminPanel(bot))
 
 
 class UMFPrimaryView(discord.ui.View):
-    """Public UMF panel with two gates: normal + admin."""
-
     def __init__(self):
         super().__init__(timeout=300)
 
-    @discord.ui.button(label="🌍 Request Recognition",
+    @discord.ui.button(label="Request Recognition",
                        style=discord.ButtonStyle.primary, emoji="🌍", row=0)
     async def request_btn(self, i, b):
         await i.response.send_modal(UMFRecognitionModal())
 
-    @discord.ui.button(label="📋 View Nations",
+    @discord.ui.button(label="View Nations",
                        style=discord.ButtonStyle.secondary, emoji="📋", row=0)
     async def list_btn(self, i, b):
         guild_id = i.guild.id if i.guild else None
@@ -4385,22 +5003,29 @@ class UMFPrimaryView(discord.ui.View):
             emb.description = "No nations recognized yet."
         await i.response.send_message(embed=emb, ephemeral=True)
 
-    @discord.ui.button(label="ℹ️ My Status",
+    @discord.ui.button(label="My Status",
                        style=discord.ButtonStyle.secondary, emoji="ℹ️", row=0)
     async def status_btn(self, i, b):
         guild_id = i.guild.id if i.guild else None
         req = bot.umf_data.get_request_status(guild_id, i.user.id)
         if req:
             status = req.get("status", "unknown")
-            color, title = (C_WARM, "⏳ Pending") if status == "pending" else (
-                (C_OK, "✅ Approved") if status == "approved" else (C_ERR, "❌ Denied"))
+            if status == "pending":
+                color, title = C_WARM, "⏳ Pending"
+            elif status == "approved":
+                color, title = C_OK, "✅ Approved"
+            else:
+                color, title = C_ERR, "❌ Denied"
             emb = discord.Embed(title=title,
-                                description=f"**{req.get('nation', '')}**", color=color)
+                                description=f"**{req.get('nation', '')}**",
+                                color=color)
             if status == "denied" and req.get("denied_reason"):
-                emb.add_field(name="Reason", value=req["denied_reason"], inline=False)
+                emb.add_field(name="Reason", value=req["denied_reason"],
+                              inline=False)
         else:
             emb = discord.Embed(title="ℹ️ No Request",
-                                description="You have no active request.", color=C_DEEP)
+                                description="You have no active request.",
+                                color=C_DEEP)
         await i.response.send_message(embed=emb, ephemeral=True)
 
     @discord.ui.button(label="I am an admin",
@@ -4408,12 +5033,14 @@ class UMFPrimaryView(discord.ui.View):
     async def admin_btn(self, i, b):
         if not i.user.guild_permissions.administrator:
             return await i.response.send_message(
-                "⛔ You don't have admin permissions in this server.", ephemeral=True)
+                "⛔ You don't have admin permissions in this server.",
+                ephemeral=True)
         emb = discord.Embed(
             title="🔒 UMF Admin Panel",
             description="Manage pending requests, view stats, view nations.",
             color=C_DEEP)
-        await i.response.send_message(embed=emb, view=UMFAdminPanel(bot), ephemeral=True)
+        await i.response.send_message(embed=emb, view=UMFAdminPanel(bot),
+                                      ephemeral=True)
 
 
 def umf_requirements_embed() -> discord.Embed:
@@ -4461,10 +5088,6 @@ def _looks_like_gif_request(text: str) -> bool:
 async def _try_describe_gif(message: discord.Message,
                             content: str,
                             uid: int) -> Optional[str]:
-    """Return a description if there's a GIF anywhere in scope.
-    Order of precedence: message attachments → URLs in content →
-    replied message's attachments/URLs."""
-
     # 1. attachments on this message
     for att in message.attachments:
         ct = (att.content_type or "").lower()
@@ -4510,7 +5133,6 @@ async def on_message(message: discord.Message):
         or f"<@{bot.user.id}>" in content
         or f"<@!{bot.user.id}>" in content)
 
-    # ping preference gate
     pref = bot.get_ping_pref(message.author.id)
     if pref == "off" and not is_dm:
         await bot.process_commands(message)
@@ -4542,24 +5164,19 @@ async def on_message(message: discord.Message):
             }
             reply_msg = resolved
 
-    # images from this message or the reply
     images = await fetch_images_from_message(message)
     if not images and reply_msg is not None:
         images = await fetch_images_from_message(reply_msg)
 
-    # cooldown
     now = time.time()
     if now - bot.user_cooldowns.get(message.author.id, 0) < USER_COOLDOWN_SECONDS:
         await bot.process_commands(message)
         return
     bot.user_cooldowns[message.author.id] = now
 
-    # clean mention out
     clean = re.sub(r'<@!?{}>\s*'.format(bot.user.id), '', content).strip()
 
-    # ---- GIF reader intercept ----
-    # Triggered when: (a) user asked "what's this gif" etc., OR
-    # (b) a GIF was attached/pasted with no other text.
+    # GIF reader intercept
     has_gif_attachment = any(
         "gif" in (a.content_type or "").lower()
         or a.filename.lower().endswith((".gif", ".mp4"))
