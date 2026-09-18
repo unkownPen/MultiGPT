@@ -28,12 +28,14 @@ from google import genai
 from google.genai import types
 
 # optional voice support
+_VOICE_LIB_OK = False
 try:
     import nacl  # noqa: F401
+    import davey  # noqa: F401
     _VOICE_LIB_OK = True
-except Exception:
+except Exception as _ve:
+    logger.warning(f"Voice libs missing: {_ve}")
     _VOICE_LIB_OK = False
-
 # ======================================================================
 # LOGGING
 # ======================================================================
