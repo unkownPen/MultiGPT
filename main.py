@@ -6322,7 +6322,6 @@ async def on_message(message: discord.Message):
             f"attachments={[(a.filename, a.content_type) for a in message.attachments]} "
             f"embeds={[(e.type, getattr(e.video, 'url', None), getattr(e.image, 'url', None)) for e in (message.embeds or [])]}"
         )
-
     # ---------- 1. IMAGE EDIT INTERCEPT ----------
     try:
         if _looks_like_image_edit(clean or content):
