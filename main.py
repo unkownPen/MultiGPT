@@ -6320,10 +6320,18 @@ async def on_message(message: discord.Message):
         logger.info(
             f"[GIF-DEBUG] content={content[:120]!r} "
             f"attachments={[(a.filename, a.content_type) for a in message.attachments]} "
-            f"embeds={[(e.type, getattr(e.video, 'url', None), "
-            f"getattr(e.image, 'url', None)) for e in (message.embeds or [])]}"
+            f"embeds={[(e.type, getattr(e.video, 'url', None), getattr(e.image, 'url', None)) for e in (message.embeds or [])]}"
         )
 
+    # ---------- 1. IMAGE EDIT INTERCEPT ----------
+    try:
+        if _looks_like_image_edit(clean or content):
+            has_attach = any((a.content_type or "").startswith(("image/", "video/"))
+                             for a in message.attachments)
+            reply_atts = await _reply_chain_media(message)
+            has_reply_media = any(
+                (a.content_type or "").startswith(("image/", "video/"))
+                for a in reply_atts)
     # ---------- 1. IMAGE EDIT INTERCEPT ----------
     try:
         if _looks_like_image_edit(clean or content):
