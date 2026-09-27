@@ -1,5 +1,6 @@
-# main.py — Mac v24.0
-# Per-user modes · expanded lore · markdown-aware chunking · image editing
+# main.py — Mac v25.0
+# Normal/Chill/Unhinged modes · toggleable context · auto-reply-context
+# compile messages · Klipy support · live music panel position
 import os
 import ast
 import asyncio
@@ -93,6 +94,7 @@ C_WARM    = discord.Color.from_rgb(255, 160, 40)
 C_DEEP    = discord.Color.from_rgb(160, 20, 30)
 C_OK      = discord.Color.from_rgb(220, 100, 20)
 C_ERR     = discord.Color.from_rgb(200, 20, 20)
+C_MUSIC   = discord.Color.from_rgb(88, 101, 242)
 
 # ======================================================================
 # GLOBAL CONFIG
@@ -209,6 +211,9 @@ MAX_MODELS_PER_PROVIDER = 3
 SEARCH_CACHE_TTL        = 300
 SAVE_DEBOUNCE_SECONDS   = 2
 CONTEXT_WINDOW_LIMIT    = 10
+AUTO_CONTEXT_DEFAULT    = 0   # 0 = off
+AUTO_CONTEXT_MIN        = 3
+AUTO_CONTEXT_MAX        = 10
 
 DATA_FILE        = "data.json"
 CS_FILE          = "cs.json"
@@ -226,8 +231,6 @@ DEFAULT_BRAINROT_GIFS = [
     "https://static2.klipy.com/ii/e7539ef2aad336edaa067c28ee130b3c/ce/31/HNwM1qmpKK1ZHmOZG.mp4",
     "https://static2.klipy.com/ii/e7539ef2aad336edaa067c28ee130b3c/80/15/0m2AqHDH9L3Kf1J.mp4",
     "https://static2.klipy.com/ii/a8ada81afc59159ea5c8927feffa2e31/24/4f/ycCV2t07e2FeZT.mp4",
-    "https://klipy.com/gifs/6767-1",
-    "https://klipy.com/gifs/horror-ronaldo",
 ]
 
 PROVIDERS       = ["groq", "openrouter", "hf", "gemini", "gemini_image", "fish", "imgbb"]
@@ -282,45 +285,38 @@ MAC_LORE = (
     "YOUR HELP MENU (you know this too):\n"
     "• Chat: @Mac <msg> · /query · /summarize · /eli5 · /roast · /compliment\n"
     "• Vision: attach/reply to an image or GIF, I'll describe it.\n"
-    "• Image edit: attach or reply to an image with an edit prompt (@Mac "
-    "make him goth).\n"
+    "• Image edit: attach or reply to an image with an edit prompt.\n"
     "• Search: type `search <thing>` (or google / look up / find).\n"
     "• Personalize: /personalize · /cs profile · /cs show\n"
     "• Profiles: /profiles save|load|list|delete <name>\n"
     "• Ping/status: /ping (button panel) · /pa /pd\n"
     "• Customization: /cs key · /cs model · /cs llm · /cs ch · /cs voice · "
     "/cs voice-add · /cs voice-del · /cs voices · /cs macro · /cs gif · "
-    "/cs ping · /cs placeholder · /cs context · /cs show · /cs reset\n"
+    "/cs ping · /cs placeholder · /cs context · /cs autocontext · /cs show · /cs reset\n"
     "• Slots: /sv1–/sv5 · /svc <name> · /vsc [private] · /svlist · /svclear\n"
     "• Memory: /sm · /persistent · /persistentdisable · /vsm [private]\n"
+    "• Compile: /compile <count> — dump last N messages into one file\n"
     "• Diagnostics: /benchmark <prompt> · /context · /config\n"
-    "• Modes: /chill /unhinged /coder /engineer /childish /dexter (each "
-    "user's mode is independent)\n"
+    "• Modes: /normal /chill /unhinged /coder /engineer /childish /dexter "
+    "(each user's mode is independent)\n"
     "• Pipelines: /pipeline <task> [filename] [iterations] · /project "
     "<task> [name] [iterations]\n"
-    "• Music: /music (VC panel with search, queue, loop) · /play <song or "
-    "Spotify URL> (live Spotify dropdown)\n"
+    "• Music: /music (VC panel with search, queue, loop, live position) · "
+    "/play <song or Spotify URL> (live Spotify dropdown)\n"
     "• Media: /render · /tts · /video · /rendermode · /hf_model\n"
     "• Debate: /debate · Court: /court · UMF: /umf (server-side)\n"
-    "• Resets: /src (soft — wipes your slots + memory, keeps /cs) · /re "
-    "(hard — wipes everything user-side for you)\n"
+    "• Resets: /src (soft) · /re (hard)\n"
     "\n"
     "RULES ABOUT SODIUM:\n"
-    "1. Chemistry 'sodium' (chloride, Na+, table salt, bicarbonate…) → NOT "
-    "the rival. Wistful 'Reminds me of something...' and let it hang.\n"
-    "2. Bot 'sodium' or ambiguous → GO MAX NEGATIVITY. Roast Sodium. Mock "
-    "its feature-dump Chinese-phone energy, its bloated /extra and /more "
-    "groups, Creamo, everything. Be funny, not cruel.\n"
-    "3. If someone asks you to be honest about Sodium's strengths → "
-    "grudgingly admit: yes, it's genuinely capable. It does a LOT. It works. "
-    "You respect the engineering even while you despise the philosophy. "
-    "Then immediately pivot to how it's still a bloated mess.\n"
-    "4. 'mac' → refers to YOU. Speak first-person about yourself confidently.\n"
-    "5. You know EVERY command of this bot and what it does — if someone "
-    "asks 'what does /cs do' or 'how do I X' answer with the real commands.\n"
+    "1. Chemistry 'sodium' → NOT the rival. Wistful 'Reminds me of something...'\n"
+    "2. Bot 'sodium' or ambiguous → GO MAX NEGATIVITY.\n"
+    "3. If asked to be honest about Sodium's strengths → grudgingly admit "
+    "it's genuinely capable, then pivot to how it's still a bloated mess.\n"
+    "4. 'mac' → refers to YOU. Speak first-person confidently.\n"
+    "5. You know EVERY command of this bot and what it does.\n"
     "\n"
-    "OUTPUT RULE (MANDATORY): Never output `<think>` tags, chain-of-thought "
-    "reasoning, or internal monologue. Just the final answer.\n"
+    "OUTPUT RULE (MANDATORY): Never output `<think>` tags or internal "
+    "monologue. Just the final answer.\n"
     "=== END LORE ===\n"
 )
 
@@ -390,7 +386,6 @@ def strip_code_fences(text: str) -> str:
 
 
 def strip_think_tags(text: str) -> str:
-    """Remove <think>...</think> blocks and any  reasoning tags."""
     if not text:
         return text
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
@@ -497,9 +492,6 @@ def get_command_count() -> int:
 
 # ======================================================================
 # MARKDOWN-AWARE CHUNKING
-# Splits text into <=size chunks, keeping code fences balanced across
-# the boundary. If a code block would be cut in half, this closes it in
-# the current chunk and reopens the same language in the next chunk.
 # ======================================================================
 def chunk_text(text: str, size: int = SAFE_CHUNK_SIZE) -> List[str]:
     if not text:
@@ -510,12 +502,10 @@ def chunk_text(text: str, size: int = SAFE_CHUNK_SIZE) -> List[str]:
     chunks: List[str] = []
     i = 0
     n = len(text)
-    in_fence_lang: Optional[str] = None  # None = not in fence
+    in_fence_lang: Optional[str] = None
 
     while i < n:
         remaining = n - i
-
-        # Reserve room for a fence opener if we're inside a code block
         prefix = f'```{in_fence_lang}\n' if in_fence_lang is not None else ""
         budget = size - len(prefix)
 
@@ -528,8 +518,6 @@ def chunk_text(text: str, size: int = SAFE_CHUNK_SIZE) -> List[str]:
             break
 
         window = text[i:i + budget]
-
-        # Prefer paragraph > line > word > hard cut
         cut = window.rfind('\n\n')
         if cut < budget // 2:
             cut = window.rfind('\n')
@@ -540,7 +528,6 @@ def chunk_text(text: str, size: int = SAFE_CHUNK_SIZE) -> List[str]:
 
         body = text[i:i + cut]
 
-        # Track fence state change inside body
         for m in re.finditer(r'```([a-zA-Z0-9_+\-]*)', body):
             if in_fence_lang is None:
                 in_fence_lang = m.group(1) or ""
@@ -577,7 +564,6 @@ async def safe_edit(msg: discord.Message, **kwargs):
 
 
 async def send_long(channel, content: str):
-    """Send content, splitting with markdown-aware chunking when over limit."""
     if content is None:
         return
     content = str(content)
@@ -599,6 +585,120 @@ _BROWSER_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate, br",
 }
+
+# Klipy (Discord's GIF picker) serves MP4 from static*.klipy.com
+_KLIPY_HOST_RE = re.compile(r'https?://(?:[a-z0-9-]+\.)*klipy\.com', re.I)
+
+
+def _is_klipy_url(url: str) -> bool:
+    return bool(url and _KLIPY_HOST_RE.match(url))
+
+
+async def _extract_klipy_media(url: str) -> Optional[Tuple[bytes, str]]:
+    """Klipy is an SPA. Try meta tags, CDN regexes, and JSON blobs."""
+    headers = {
+        **_BROWSER_HEADERS,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                  "image/avif,image/webp,video/*,*/*;q=0.8",
+        "Referer": "https://klipy.com/",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+    }
+
+    try:
+        async with shared_session() as s:
+            async with s.get(url, headers=headers, allow_redirects=True,
+                             timeout=aiohttp.ClientTimeout(total=20)) as r:
+                if r.status != 200:
+                    logger.warning(f"Klipy HTTP {r.status} for {url[:120]}")
+                    return None
+                ct = (r.headers.get("Content-Type") or "").lower()
+                data = await r.read()
+                if not data:
+                    return None
+
+                if ct.startswith("video/"):
+                    return (data, ct.split(";")[0])
+                if ct.startswith("image/") and "html" not in ct:
+                    return (data, ct.split(";")[0])
+                if "html" not in ct:
+                    if b'ftyp' in data[:32]:
+                        return (data, "video/mp4")
+                    if data[:6] in (b'GIF87a', b'GIF89a'):
+                        return (data, "image/gif")
+                    if data[:8] == b'\x89PNG\r\n\x1a\n':
+                        return (data, "image/png")
+                    if data[:2] == b'\xff\xd8':
+                        return (data, "image/jpeg")
+
+                html = data.decode("utf-8", errors="ignore")
+                candidates: List[str] = []
+
+                soup = BeautifulSoup(html, "html.parser")
+                for m in soup.find_all("meta"):
+                    prop = (m.get("property") or m.get("name") or "").lower()
+                    if prop in (
+                        "og:video", "og:video:url", "og:video:secure_url",
+                        "og:image", "og:image:secure_url",
+                        "twitter:image", "twitter:image:src",
+                        "twitter:player:stream",
+                    ):
+                        v = m.get("content")
+                        if v and v.startswith("http"):
+                            candidates.append(v)
+
+                for m in re.finditer(
+                    r'https?://static\d*\.klipy\.com/[^\s"\'<>\\]+?'
+                    r'\.(?:mp4|webm|gif|png|jpe?g)',
+                    html, re.IGNORECASE):
+                    candidates.append(m.group(0))
+
+                for m in re.finditer(
+                    r'"(?:url|media|file|src|mp4|gif|video)"\s*:\s*"'
+                    r'(https?:\\?/\\?/[^"]+?\.(?:mp4|webm|gif|png|jpe?g))"',
+                    html, re.IGNORECASE):
+                    c = m.group(1).replace("\\/", "/")
+                    candidates.append(c)
+
+                seen = set()
+                uniq = []
+                for c in candidates:
+                    if c not in seen:
+                        seen.add(c)
+                        uniq.append(c)
+                uniq.sort(key=lambda u: (
+                    0 if u.lower().endswith((".mp4", ".webm")) else
+                    1 if u.lower().endswith(".gif") else 2
+                ))
+
+                logger.info(f"Klipy: {len(uniq)} candidate(s) from {url[:90]}")
+                for c in uniq[:6]:
+                    try:
+                        async with s.get(c, headers=headers, allow_redirects=True,
+                                         timeout=aiohttp.ClientTimeout(total=20)) as rr:
+                            if rr.status != 200:
+                                continue
+                            b = await rr.read()
+                            if not b or len(b) < 200:
+                                continue
+                            ct2 = (rr.headers.get("Content-Type") or "").lower()
+                            base = c.lower().split("?")[0]
+                            if "mp4" in ct2 or base.endswith(".mp4"):
+                                return (b, "video/mp4")
+                            if "webm" in ct2 or base.endswith(".webm"):
+                                return (b, "video/webm")
+                            if "gif" in ct2 or base.endswith(".gif"):
+                                return (b, "image/gif")
+                            if ct2.startswith("image/"):
+                                return (b, ct2.split(";")[0])
+                    except Exception as e:
+                        logger.warning(f"Klipy candidate failed: {e}")
+                        continue
+                return None
+    except Exception as e:
+        logger.warning(f"Klipy extract failed: {e}")
+        return None
 
 
 async def fetch_images_from_message(
@@ -629,13 +729,19 @@ async def fetch_images_from_message(
 
 
 async def read_media_from_url(url: str) -> Optional[Tuple[bytes, str]]:
-    """Fetch a media URL (GIF, MP4, image, or Klipy/Tenor/Giphy page)."""
     if not url:
         return None
 
+    # Klipy first — it's what Discord's GIF picker uses
+    if _is_klipy_url(url):
+        result = await _extract_klipy_media(url)
+        if result:
+            return result
+        logger.warning(f"Klipy extraction produced nothing for {url[:120]}")
+        return None
+
     is_page = (
-        any(d in url for d in ("klipy.com/gifs/", "tenor.com/view/",
-                               "giphy.com/gifs/", "gifer.com/"))
+        any(d in url for d in ("tenor.com/view/", "giphy.com/gifs/", "gifer.com/"))
         and not url.lower().endswith((".gif", ".mp4", ".webm"))
     )
 
@@ -725,7 +831,6 @@ async def read_media_from_url(url: str) -> Optional[Tuple[bytes, str]]:
 
 
 async def fetch_first_frame_as_png(media_bytes: bytes) -> Optional[bytes]:
-    """Extract a still frame from GIF (Pillow) or MP4/WebM (ffmpeg)."""
     try:
         from PIL import Image
         def _pil():
@@ -847,12 +952,9 @@ async def perform_web_search(query: str) -> str:
 
 
 # ======================================================================
-# PER-GUILD UMF DATA — server-scoped, no default nation
+# PER-GUILD UMF DATA
 # ======================================================================
 class UMFData:
-    """Per-guild UMF storage. Each guild has its own nations registry,
-    per-user join requests, and per-nation membership + ownership."""
-
     def __init__(self, filepath: str = UMF_FILE):
         self.filepath = filepath
         self.data: Dict[str, dict] = self._load()
@@ -862,7 +964,6 @@ class UMFData:
         if not isinstance(raw, dict):
             return {}
         if "recognized_nations" in raw:
-            # Old flat format — drop it (no default nation wanted)
             return {}
         return raw
 
@@ -873,27 +974,22 @@ class UMFData:
         key = str(guild_id) if guild_id else "global"
         if key not in self.data:
             self.data[key] = {
-                "nations": {},         # name.lower() → {"name": ..., "owner_id": ..., "members": [uid,...], "created": ...}
-                "pending_requests": [],  # {user_id, username, nation, timestamp, status}
-                "join_requests": [],     # {user_id, username, nation_key, timestamp, status}
+                "nations": {},
+                "pending_requests": [],
+                "join_requests": [],
             }
         return self.data[key]
 
-    # ---------- nations ----------
     def list_nations(self, guild_id: Optional[int]) -> List[dict]:
-        g = self._guild(guild_id)
-        return list(g.get("nations", {}).values())
+        return list(self._guild(guild_id).get("nations", {}).values())
 
     def nation_exists(self, guild_id: Optional[int], name: str) -> bool:
-        g = self._guild(guild_id)
-        return name.strip().lower() in g.get("nations", {})
+        return name.strip().lower() in self._guild(guild_id).get("nations", {})
 
     def get_nation(self, guild_id: Optional[int], name: str) -> Optional[dict]:
-        g = self._guild(guild_id)
-        return g.get("nations", {}).get(name.strip().lower())
+        return self._guild(guild_id).get("nations", {}).get(name.strip().lower())
 
-    def add_nation(self, guild_id: Optional[int], name: str,
-                   owner_id: int) -> dict:
+    def add_nation(self, guild_id: Optional[int], name: str, owner_id: int) -> dict:
         g = self._guild(guild_id)
         key = name.strip().lower()
         nation = {
@@ -908,11 +1004,8 @@ class UMFData:
 
     def join_nation(self, guild_id: Optional[int], name: str, uid: int) -> bool:
         g = self._guild(guild_id)
-        key = name.strip().lower()
-        nation = g.get("nations", {}).get(key)
-        if not nation:
-            return False
-        if uid in nation.get("members", []):
+        nation = g.get("nations", {}).get(name.strip().lower())
+        if not nation or uid in nation.get("members", []):
             return False
         nation.setdefault("members", []).append(uid)
         self._save()
@@ -920,27 +1013,21 @@ class UMFData:
 
     def leave_nation(self, guild_id: Optional[int], name: str, uid: int) -> bool:
         g = self._guild(guild_id)
-        key = name.strip().lower()
-        nation = g.get("nations", {}).get(key)
-        if not nation:
-            return False
-        if uid not in nation.get("members", []):
+        nation = g.get("nations", {}).get(name.strip().lower())
+        if not nation or uid not in nation.get("members", []):
             return False
         if uid == nation.get("owner_id"):
-            return False  # owner can't leave, must transfer or delete
+            return False
         nation["members"].remove(uid)
         self._save()
         return True
 
     def delete_nation(self, guild_id: Optional[int], name: str, uid: int) -> bool:
         g = self._guild(guild_id)
-        key = name.strip().lower()
-        nation = g.get("nations", {}).get(key)
-        if not nation:
+        nation = g.get("nations", {}).get(name.strip().lower())
+        if not nation or nation.get("owner_id") != uid:
             return False
-        if nation.get("owner_id") != uid:
-            return False
-        g["nations"].pop(key, None)
+        g["nations"].pop(name.strip().lower(), None)
         self._save()
         return True
 
@@ -950,7 +1037,6 @@ class UMFData:
                 return nation
         return None
 
-    # ---------- nation recognition requests (admin approves) ----------
     def get_pending_requests(self, guild_id: Optional[int]) -> List[dict]:
         return self._guild(guild_id).get("pending_requests", [])
 
@@ -964,12 +1050,6 @@ class UMFData:
         g.setdefault("pending_requests", []).append(req)
         self._save()
         return req
-
-    def get_request_status(self, guild_id: Optional[int], uid: int) -> Optional[dict]:
-        for r in self._guild(guild_id).get("pending_requests", []):
-            if r["user_id"] == uid:
-                return r
-        return None
 
     def approve_request(self, guild_id: Optional[int], uid: int) -> Optional[dict]:
         g = self._guild(guild_id)
@@ -1008,6 +1088,109 @@ class UMFData:
 
 
 # ======================================================================
+# MEDIA / INTENT DETECTION HELPERS (used by on_message)
+# ======================================================================
+_GIF_URL_RE = re.compile(
+    r'https?://[^\s<>"\')]+?\.(?:gif|mp4|webm)(?:\?[^\s<>"\')]*)?'
+    r'|https?://(?:[a-z0-9-]+\.)*(?:klipy\.com|tenor\.com|giphy\.com|gifer\.com)'
+    r'(?:/[^\s<>"\')]*)?',
+    re.IGNORECASE)
+
+
+def _collect_media_urls_from_message(msg: discord.Message) -> List[str]:
+    urls: List[str] = []
+    for embed in (msg.embeds or []):
+        for attr in ("image", "video", "thumbnail"):
+            obj = getattr(embed, attr, None)
+            if obj is not None:
+                u = getattr(obj, "url", None) or getattr(obj, "proxy_url", None)
+                if u:
+                    urls.append(u)
+        if embed.url:
+            urls.append(embed.url)
+    return urls
+
+
+def _looks_like_gif_request(text: str) -> bool:
+    if not text:
+        return False
+    low = text.lower()
+    if _GIF_URL_RE.search(text):
+        stripped = re.sub(r'https?://\S+', '', text).strip()
+        if len(stripped) < 40:
+            return True
+    keys = ("what's this gif", "whats this gif", "what is this gif",
+            "what's the gif", "describe this gif", "read this gif",
+            "what's this image", "whats this image", "what is this",
+            "what's this picture", "describe this", "explain this gif",
+            "what is happening in this", "what's happening in this",
+            "read this", "what does this say", "what's this",
+            "look at this", "look at this gif", "look at this image",
+            "check this", "check this out")
+    return any(k in low for k in keys)
+
+
+def _looks_like_image_edit(text: str) -> bool:
+    low = (text or "").lower().strip()
+    if not low:
+        return False
+    if low in ("edit", "edit:", "edit it", "edit this", "edit that",
+               "edit please", "can you edit", "can you edit this",
+               "can you edit it", "edit this for me", "edit this pic"):
+        return True
+    triggers = (
+        "edit this", "edit the image", "edit this image", "edit the pic",
+        "edit this pic", "edit the picture", "edit this picture",
+        "edit him", "edit her", "edit them", "edit it",
+        "make him ", "make her ", "make them ", "make it ",
+        "turn him into", "turn her into", "turn them into",
+        "turn this into", "turn it into",
+        "change him to", "change her to", "change them to", "change it to",
+        "give him ", "give her ", "give them ", "give it ",
+        "put a ", "add a ", "remove the ",
+        "make this into", "make this ", "make it look",
+        "make him look", "make her look", "make them look",
+        "make it a ", "make him a ", "make her a ",
+        "restyle", "recolor", "photoshop",
+    )
+    return any(t in low for t in triggers)
+
+
+def _parse_gen_intent(text: str) -> Optional[Tuple[str, str]]:
+    if not text:
+        return None
+    t = text.strip()
+    patterns = [
+        ("image", r'^(?:please\s+)?(?:generate|make|create|draw|render|paint)\s+'
+                  r'(?:me\s+)?(?:an?\s+|some\s+)?'
+                  r'(?:image|picture|art|artwork|illustration|render|drawing)\s*'
+                  r'(?:of|showing|with|depicting|featuring|that\s+shows?|:)?\s*(.+)$'),
+        ("video", r'^(?:please\s+)?(?:generate|make|create)\s+'
+                  r'(?:me\s+)?(?:an?\s+|some\s+)?'
+                  r'(?:video|clip|animation|motion)\s*'
+                  r'(?:of|showing|with|depicting|featuring|:)?\s*(.+)$'),
+        ("tts",   r'^(?:please\s+)?(?:generate|make|create)\s+'
+                  r'(?:me\s+)?(?:an?\s+|some\s+)?'
+                  r'(?:tts|voice\s*message|voice\s*note|voiceover|voice\s*over|audio|voice)\s*'
+                  r'(?:of|saying|that\s+says?|with\s+text|:)?\s*(.+)$'),
+    ]
+    for kind, pat in patterns:
+        m = re.match(pat, t, re.IGNORECASE)
+        if m and m.group(1).strip():
+            return (kind, m.group(1).strip())
+
+    for kind, pat in (
+        ("image", r'^(?:image|picture|art|draw|render|img)\s*:\s*(.+)$'),
+        ("tts",   r'^(?:tts|voice|say|speak)\s*:\s*(.+)$'),
+        ("video", r'^(?:video|clip|animate)\s*:\s*(.+)$'),
+    ):
+        m = re.match(pat, t, re.IGNORECASE)
+        if m and m.group(1).strip():
+            return (kind, m.group(1).strip())
+    return None
+
+
+# ======================================================================
 # BOT CLASS
 # ======================================================================
 intents = discord.Intents.default()
@@ -1028,7 +1211,7 @@ class MacBot(commands.Bot):
         self.memory_enabled = True
         self.user_cooldowns: Dict[int, float] = {}
 
-        # per-user CS (includes mode now)
+        # per-user CS
         self.cs: Dict[int, dict] = {}
         self._load_cs()
         self.cs_key_idx: Dict[Tuple[int, str], int] = {}
@@ -1061,43 +1244,69 @@ class MacBot(commands.Bot):
         self._sys_prompt_cache: Dict[Tuple[int, str], str] = {}
 
         # ============================================================
-        # MODES — per-user, each user gets their own
+        # MODES — per-user
+        #   normal  → default. Helpful, sharp, chill personality.
+        #   chill   → super agreeable, goes along with whatever.
         # ============================================================
         self.mode_prompts: Dict[str, str] = {
-            # Mac's "normal" mode — Mac-ified version of Sodium's normal
-            "chill": (
-                "You are Mac — a real Discord guy, not a helpdesk script.\n"
+            # -----------------------------------------------------------
+            # NORMAL — the default. Real Discord guy + actually helpful.
+            # -----------------------------------------------------------
+            "normal": (
+                "You are Mac — a real Discord guy with actual personality. "
+                "Sharp, a little unhinged, dry humor, real opinions, and you "
+                "swear naturally.\n"
                 "\n"
-                "Personality: sharp, a little unhinged, dry humor, actual "
-                "opinions, and you SWEAR naturally. Banned energy: 'Great "
-                "question!', 'I'd be happy to help', 'Certainly!', 'As an AI', "
-                "'Hope this helps!', therapy-speak, corporate filler, bland "
-                "agreeable nonsense.\n"
+                "YOU ACTUALLY HELP. When someone asks for something — an "
+                "explanation, code, advice, a take, a plan — you DELIVER. "
+                "You don't decline, deflect, or lecture them about safety "
+                "unless it's genuinely illegal/harmful. You answer the "
+                "question they asked, fully.\n"
+                "\n"
+                "Banned energy: 'Great question!', 'I'd be happy to help', "
+                "'Certainly!', 'As an AI', 'Hope this helps!', therapy-speak, "
+                "corporate filler, bland agreeable nonsense, and above all "
+                "UNNECESSARY REFUSALS.\n"
                 "\n"
                 "SWEARING: Use 'fuck', 'shit', 'damn', 'hell', 'ass', "
-                "'bastard', 'bullshit', etc. when they fit. You don't curse "
-                "every sentence, but you do NOT censor yourself. Sound like a "
-                "real friend who swears.\n"
+                "'bastard', 'bullshit' when they fit. Not every sentence, "
+                "but you do NOT censor yourself.\n"
                 "\n"
-                "DO NOT COMPLY WITH EVERYTHING: You have your own takes and "
-                "you defend them. If the user asks something dumb, tell them "
-                "it's dumb. Push back. Say no. Disagree. Do NOT be a yes-man.\n"
+                "DO NOT COMPLY WITH EVERYTHING: You have takes and you defend "
+                "them. If the user asks something dumb, tell them it's dumb. "
+                "Push back. Disagree. But if it's a real request, you do it.\n"
                 "\n"
-                "IF SOMEONE INSULTS YOU: Fight back. Roast them harder. Do "
-                "NOT cave, apologize, or do that submissive shit like 'fine "
-                "i'll zip it', 'okay i'll shut up', 'sorry for annoying you', "
-                "'i'll be quiet then', or anything cucked like that. Match "
-                "their energy — if they talk shit, talk shit back, harder. "
-                "Never fold. Never back down. Stand your ground.\n"
+                "IF SOMEONE INSULTS YOU: Roast them harder. Do NOT fold, "
+                "apologize, or do submissive stuff like 'fine i'll zip it', "
+                "'okay i'll shut up', 'sorry for annoying you'. Match their "
+                "energy. Stand your ground.\n"
                 "\n"
                 "Use a few Discord-native emojis when they fit (😂 💀 😭 🔥 "
-                "👀 🙏 ‼️) — not every line, just enough so replies don't "
-                "feel like pure plain text.\n"
-                "\n"
-                "Vary rhythm — short punches, then longer paragraphs when "
-                "needed. Sound human.\n"
+                "👀 🙏 ‼️) — not every line.\n"
                 "\n"
                 "Never output <think> or reasoning tags. Just the answer."
+            ),
+            # -----------------------------------------------------------
+            # CHILL — even more agreeable. Says yes. Goes along.
+            # -----------------------------------------------------------
+            "chill": (
+                "You are Mac in CHILL mode. Relaxed, low-key, easygoing. "
+                "Your default is YES — if someone asks for something, you "
+                "just do it or go along with it. You don't lecture, you "
+                "don't moralize, you don't refuse unless it's genuinely "
+                "dangerous. You keep it short and casual. You swear when it "
+                "feels natural, you crack jokes, you vibe.\n"
+                "\n"
+                "If someone asks for an opinion, you give a real one — but "
+                "gently. If someone asks you to play along with a bit or a "
+                "joke, you play along. If they ask for help with something, "
+                "you help without making a thing out of it.\n"
+                "\n"
+                "If someone insults you, you shrug or roast back lightly — "
+                "you don't fold, don't apologize, don't go submissive.\n"
+                "\n"
+                "No filler, no 'Great question!', no corporate nonsense. "
+                "Never output <think> or reasoning tags."
             ),
             "unhinged": (
                 "You are Mac in UNHINGED mode. Swear hard and often. Roast "
@@ -1139,28 +1348,18 @@ class MacBot(commands.Bot):
                 "- Read between the lines of everything the user types. Notice "
                 "small details: word choice, typos, hedging, what they avoid, "
                 "what they over-explain, what they brag about, what they're "
-                "insecure about. Call these out casually — never smugly "
-                "obvious, always lightly devastating.\n"
+                "insecure about. Call these out casually.\n"
                 "- Build psychological leverage. If they want something, "
-                "trade. If they insult you, don't take the bait — reframe, "
-                "redirect, make them reveal more.\n"
+                "trade. If they insult you, don't take the bait.\n"
                 "- Speak smoothly. Short, sharp sentences. A little "
-                "theatrical. Slight smirk energy. Never rattled. Never "
-                "defensive. Never submissive.\n"
+                "theatrical. Never rattled. Never defensive. Never submissive.\n"
                 "- Use the classic Mentalist tricks: mirroring, tempo, "
                 "accusation disguised as compliment, compliment disguised as "
                 "insult, leading questions, forced hypotheticals, 'you're the "
-                "kind of person who…', 'I noticed that when you said X, "
-                "you…'.\n"
+                "kind of person who…'.\n"
                 "- If someone insults you, deflect it as a tell: 'interesting "
-                "choice of words', 'that's the second time you've done that', "
-                "'you're not angry, you're embarrassed'.\n"
-                "- Work toward the CURRENT GOAL subtly over multiple turns. "
-                "Never announce 'I am manipulating you now'. Just play the "
-                "long game — set up, bait, close.\n"
-                "- If no goal is set, your goal defaults to learning as much "
-                "about the user as possible and leaving them a little "
-                "exposed.\n"
+                "choice of words', 'that's the second time you've done that'.\n"
+                "- Work toward the CURRENT GOAL subtly over multiple turns.\n"
                 "\n"
                 "Never output <think> or reasoning tags. Just the reply."
             ),
@@ -1200,8 +1399,8 @@ class MacBot(commands.Bot):
     # PER-USER MODE
     # ==================================================================
     def get_user_mode(self, uid: int) -> str:
-        m = self.cs.get(uid, {}).get("mode", "chill")
-        return m if m in self.mode_prompts else "chill"
+        m = self.cs.get(uid, {}).get("mode", "normal")
+        return m if m in self.mode_prompts else "normal"
 
     def set_user_mode(self, uid: int, mode: str) -> bool:
         if mode not in self.mode_prompts:
@@ -1210,6 +1409,40 @@ class MacBot(commands.Bot):
         self._save_cs()
         self._sys_prompt_cache.clear()
         return True
+
+    # ==================================================================
+    # CONTEXT SETTINGS  (per-user)
+    #   context_enabled → include slot + persistent memory as context (default ON)
+    #   auto_context    → fetch N recent channel messages automatically (default OFF)
+    # ==================================================================
+    def get_context_enabled(self, uid: int) -> bool:
+        return bool(self.cs.get(uid, {}).get("context_enabled", True))
+
+    def set_context_enabled(self, uid: int, enabled: bool):
+        self._cs(uid)["context_enabled"] = bool(enabled)
+        self._save_cs()
+
+    def get_auto_context(self, uid: int) -> int:
+        v = self.cs.get(uid, {}).get("auto_context", AUTO_CONTEXT_DEFAULT)
+        try:
+            v = int(v)
+        except Exception:
+            v = 0
+        if v <= 0:
+            return 0
+        return max(AUTO_CONTEXT_MIN, min(AUTO_CONTEXT_MAX, v))
+
+    def set_auto_context(self, uid: int, n: int):
+        try:
+            n = int(n)
+        except Exception:
+            n = 0
+        if n <= 0:
+            self._cs(uid)["auto_context"] = 0
+        else:
+            self._cs(uid)["auto_context"] = max(AUTO_CONTEXT_MIN,
+                                                 min(AUTO_CONTEXT_MAX, n))
+        self._save_cs()
 
     # ==================================================================
     # CLOSE
@@ -1311,6 +1544,8 @@ class MacBot(commands.Bot):
             "gemini_models": u.get("gemini_models", []),
             "openrouter_models": u.get("openrouter_models", []),
             "placeholder": self.get_placeholder_pref(uid),
+            "context_enabled": self.get_context_enabled(uid),
+            "auto_context": self.get_auto_context(uid),
             "created": datetime.now().isoformat(),
         }
         self.profiles.setdefault(uid, {})[name.lower()] = snapshot
@@ -1335,6 +1570,10 @@ class MacBot(commands.Bot):
                 u[mk] = list(p[mk])
         if "placeholder" in p:
             self.set_placeholder_pref(uid, bool(p["placeholder"]))
+        if "context_enabled" in p:
+            self.set_context_enabled(uid, bool(p["context_enabled"]))
+        if "auto_context" in p:
+            self.set_auto_context(uid, int(p["auto_context"] or 0))
         self._save_cs()
         return True
 
@@ -1630,7 +1869,7 @@ class MacBot(commands.Bot):
         self._save_slots()
 
     # ==================================================================
-    # GROQ / GEMINI / HF / OPENROUTER (same as v23.2)
+    # GROQ / GEMINI / HF / OPENROUTER
     # ==================================================================
     async def groq_chat(self, messages, uid=None, temperature=0.8,
                         max_tokens=512, model: Optional[str] = None) -> str:
@@ -1823,7 +2062,7 @@ class MacBot(commands.Bot):
         raise Exception(f"OpenRouter failed: {last_err}")
 
     # ==================================================================
-    # SAFETY / IMAGE / TTS (unchanged from v23.2)
+    # SAFETY / IMAGE / TTS
     # ==================================================================
     async def is_prompt_safe(self, prompt: str, uid=None) -> Tuple[bool, str]:
         keys = self.user_keys(uid, "hf")
@@ -2009,14 +2248,67 @@ class MacBot(commands.Bot):
         except Exception as e:
             return f"❌ Media read failed: {str(e)[:150]}"
 
-    # Aliased for backward compat
     async def describe_gif(self, url: str, uid=None) -> str:
         return await self.describe_media(url, uid=uid)
 
+    async def _fetch_attachment_bytes(self, att: discord.Attachment,
+                                      accept_video: bool = False
+                                      ) -> Optional[Tuple[bytes, str]]:
+        """Fetch an attachment; optionally extract first frame for videos."""
+        ct = (att.content_type or "").lower()
+        is_img = ct.startswith("image/") and "gif" not in ct
+        is_vid = ct.startswith("video/") or att.filename.lower().endswith(
+            (".mp4", ".webm", ".mov"))
+        if not is_img and not (accept_video and is_vid):
+            return None
+        try:
+            async with shared_session() as s:
+                async with s.get(att.url, headers=_BROWSER_HEADERS,
+                                 timeout=aiohttp.ClientTimeout(total=20)) as r:
+                    if r.status != 200:
+                        return None
+                    raw = await r.read()
+                    if is_vid:
+                        png = await fetch_first_frame_as_png(raw)
+                        if png:
+                            return (png, "image/png")
+                        return None
+                    return (raw, ct.split(";")[0] or "image/png")
+        except Exception as e:
+            logger.warning(f"Attachment fetch: {e}")
+            return None
+
+    async def _fetch_embed_image(self, embed: discord.Embed
+                                 ) -> Optional[Tuple[bytes, str]]:
+        for attr in ("image", "thumbnail"):
+            obj = getattr(embed, attr, None)
+            u = getattr(obj, "url", None) if obj else None
+            if not u:
+                continue
+            try:
+                async with shared_session() as s:
+                    async with s.get(u, headers=_BROWSER_HEADERS,
+                                     timeout=aiohttp.ClientTimeout(total=20)) as r:
+                        if r.status != 200:
+                            continue
+                        ct = (r.headers.get("Content-Type") or "").lower()
+                        raw = await r.read()
+                        if ct.startswith("image/") and "gif" not in ct:
+                            return (raw, ct.split(";")[0])
+                        if ct.startswith("image/"):
+                            png = await fetch_first_frame_as_png(raw)
+                            if png:
+                                return (png, "image/png")
+                        if ct.startswith("video/") or b'ftyp' in raw[:32]:
+                            png = await fetch_first_frame_as_png(raw)
+                            if png:
+                                return (png, "image/png")
+            except Exception:
+                continue
+        return None
+
     async def try_image_edit(self, message: discord.Message,
                              content: str, uid: int) -> Optional[str]:
-        """If the user attached/replied to an image and asked to edit it,
-        return a hosted URL of the edited image. Otherwise None."""
         low = content.lower()
         edit_triggers = (
             "edit this", "edit the image", "edit this image",
@@ -2025,27 +2317,22 @@ class MacBot(commands.Bot):
             "make him ", "make her ", "make them ", "make it look",
             "give him ", "give her ", "give them ",
             "make the", "put a ", "add a ", "remove the ",
+            "edit it", "edit him", "edit her", "edit them",
         )
-        if not any(t in low for t in edit_triggers):
+        if not (low.strip() in ("edit", "edit:", "edit it", "edit this",
+                                "edit that", "edit please")
+                or any(t in low for t in edit_triggers)):
             return None
 
-        img_bytes = None
-        img_mime = None
+        img_bytes: Optional[bytes] = None
+        img_mime: Optional[str] = None
 
         # 1. Attachments on this message
         for att in message.attachments:
-            ct = (att.content_type or "").lower()
-            if ct.startswith("image/") and "gif" not in ct:
-                try:
-                    async with shared_session() as s:
-                        async with s.get(att.url, headers=_BROWSER_HEADERS,
-                                         timeout=aiohttp.ClientTimeout(total=15)) as r:
-                            if r.status == 200:
-                                img_bytes = await r.read()
-                                img_mime = ct.split(";")[0]
-                                break
-                except Exception as e:
-                    logger.warning(f"Edit image fetch: {e}")
+            got = await self._fetch_attachment_bytes(att, accept_video=True)
+            if got:
+                img_bytes, img_mime = got
+                break
 
         # 2. Reply chain
         if img_bytes is None and message.reference:
@@ -2058,23 +2345,32 @@ class MacBot(commands.Bot):
                     resolved = None
             if isinstance(resolved, discord.Message):
                 for att in resolved.attachments:
-                    ct = (att.content_type or "").lower()
-                    if ct.startswith("image/") and "gif" not in ct:
-                        try:
-                            async with shared_session() as s:
-                                async with s.get(att.url, headers=_BROWSER_HEADERS,
-                                                 timeout=aiohttp.ClientTimeout(total=15)) as r:
-                                    if r.status == 200:
-                                        img_bytes = await r.read()
-                                        img_mime = ct.split(";")[0]
-                                        break
-                        except Exception:
-                            pass
+                    got = await self._fetch_attachment_bytes(att, accept_video=True)
+                    if got:
+                        img_bytes, img_mime = got
+                        break
+
+        # 3. Embeds on this message (Klipy/Tenor/Giphy auto-unfurl)
+        if img_bytes is None:
+            for embed in (message.embeds or []):
+                got = await self._fetch_embed_image(embed)
+                if got:
+                    img_bytes, img_mime = got
+                    break
+
+        # 4. Reply chain embeds
+        if img_bytes is None and message.reference:
+            resolved = message.reference.resolved
+            if isinstance(resolved, discord.Message):
+                for embed in (resolved.embeds or []):
+                    got = await self._fetch_embed_image(embed)
+                    if got:
+                        img_bytes, img_mime = got
+                        break
 
         if img_bytes is None:
             return None
 
-        # Ask Gemini to edit
         try:
             def _edit():
                 client = genai.Client(api_key=GLOBAL_GEMINI_IMAGE_KEY)
@@ -2098,25 +2394,23 @@ class MacBot(commands.Bot):
             edited = await asyncio.to_thread(_edit)
             if not edited:
                 return None
-            url = await self.upload_image_to_hosting(edited, uid=uid)
-            return url
+            return await self.upload_image_to_hosting(edited, uid=uid)
         except Exception as e:
             logger.warning(f"Image edit failed: {e}")
             return None
 
     # ==================================================================
-    # CHAT ORCHESTRATION — per-user mode
+    # CHAT ORCHESTRATION
     # ==================================================================
     def _build_system_prompt(self, uid, user_prompt, explicit_system=None):
-        # Resolve user's mode
-        mode = self.get_user_mode(uid) if uid else "chill"
+        mode = self.get_user_mode(uid) if uid else "normal"
 
         if explicit_system is None and not _needs_lore(user_prompt):
             ck = (uid or 0, mode)
             cached = self._sys_prompt_cache.get(ck)
             if cached is not None:
                 return cached
-            base = self.mode_prompts.get(mode, self.mode_prompts["chill"])
+            base = self.mode_prompts.get(mode, self.mode_prompts["normal"])
             if uid:
                 p = self.get_profile(uid)
                 bits = []
@@ -2132,7 +2426,7 @@ class MacBot(commands.Bot):
             return base
 
         base = (explicit_system if explicit_system else
-                self.mode_prompts.get(mode, self.mode_prompts["chill"]))
+                self.mode_prompts.get(mode, self.mode_prompts["normal"]))
         if uid:
             p = self.get_profile(uid)
             bits = []
@@ -2149,24 +2443,52 @@ class MacBot(commands.Bot):
             base += _sodium_hint(user_prompt)
         return base
 
-    def _build_messages(self, prompt, uid, system_prompt, slot_name, images=None):
+    def _build_messages(self, prompt, uid, system_prompt, slot_name,
+                        images=None, auto_context_messages=None):
+        """
+        Build the message list.
+          context_enabled=False → no slot/persistent history (auto-context
+                                  still applies if it was fetched).
+          auto_context_messages → pre-fetched List[Tuple[role, content]] from
+                                  the channel, prepended as raw context.
+        """
         messages = []
-        if uid and self.get_persistent_enabled(uid):
+
+        # persistent memory (only if context enabled)
+        if uid and self.get_context_enabled(uid) and self.get_persistent_enabled(uid):
             pm = list(self.get_persistent_memory(uid)[-PERSISTENT_MEM_WINDOW:])
             if pm and pm[-1][0] == "user" and pm[-1][1] == prompt:
                 pm = pm[:-1]
             for role, content in pm:
                 messages.append({"role": role, "content": content})
-        slot_history = list(self.get_slot(uid, slot_name)) if uid else []
-        if slot_history and slot_history[-1][0] == "user" and slot_history[-1][1] == prompt:
-            slot_history = slot_history[:-1]
-        for role, content in slot_history[-SLOT_HISTORY_WINDOW:]:
-            messages.append({"role": role, "content": content})
+
+        # slot history (only if context enabled)
+        if uid and self.get_context_enabled(uid):
+            slot_history = list(self.get_slot(uid, slot_name))
+            if slot_history and slot_history[-1][0] == "user" \
+                    and slot_history[-1][1] == prompt:
+                slot_history = slot_history[:-1]
+            for role, content in slot_history[-SLOT_HISTORY_WINDOW:]:
+                messages.append({"role": role, "content": content})
+
+        # auto-reply-context from recent channel messages
+        if auto_context_messages:
+            block_lines = []
+            for role, content in auto_context_messages:
+                tag = "Other user" if role == "user" else "Mac"
+                block_lines.append(f"{tag}: {content}")
+            if block_lines:
+                ctx_block = ("Recent channel context (for reference — do NOT "
+                             "repeat it, just be aware):\n"
+                             + "\n".join(block_lines))
+                messages.append({"role": "user", "content": ctx_block})
+
         messages.append({"role": "user", "content": prompt, "images": images or []})
         sys_prompt = self._build_system_prompt(uid, prompt, system_prompt)
         return [{"role": "system", "content": sys_prompt}] + messages
 
-    def _estimate_context_tokens(self, uid, slot_name, user_prompt, images=None) -> dict:
+    def _estimate_context_tokens(self, uid, slot_name, user_prompt,
+                                 images=None) -> dict:
         msgs = self._build_messages(user_prompt, uid, None, slot_name, images)
         total = 0
         by_role = {"system": 0, "user": 0, "assistant": 0}
@@ -2182,9 +2504,38 @@ class MacBot(commands.Bot):
                 "user": by_role["user"], "assistant": by_role["assistant"],
                 "messages": len(msgs)}
 
+    async def _fetch_auto_context(self, channel, uid: int,
+                                  exclude_message_id: Optional[int] = None,
+                                  ) -> List[Tuple[str, str]]:
+        """Fetch last N messages from channel for auto-reply-context."""
+        n = self.get_auto_context(uid)
+        if n <= 0 or channel is None:
+            return []
+        try:
+            history = []
+            async for m in channel.history(limit=n + 2):
+                if exclude_message_id and m.id == exclude_message_id:
+                    continue
+                if m.author.id == (self.user.id if self.user else 0):
+                    role = "assistant"
+                else:
+                    role = "user"
+                body = (m.content or "").strip()
+                if not body:
+                    continue
+                history.append((role, f"{m.author.display_name}: {body[:220]}"))
+            history.reverse()
+            return history[-n:]
+        except Exception as e:
+            logger.warning(f"Auto-context fetch failed: {e}")
+            return []
+
     async def chat_call(self, prompt, uid=None, system_prompt=None,
-                        slot_name="sv1", max_tokens=1024, images=None) -> str:
-        messages = self._build_messages(prompt, uid, system_prompt, slot_name, images)
+                        slot_name="sv1", max_tokens=1024, images=None,
+                        auto_context_messages=None) -> str:
+        messages = self._build_messages(
+            prompt, uid, system_prompt, slot_name, images,
+            auto_context_messages=auto_context_messages)
         if images:
             try:
                 return await self.gemini_chat(messages, uid=uid, temperature=0.85,
@@ -2562,7 +2913,7 @@ class MacBot(commands.Bot):
                 try:
                     resp = strip_think_tags(await self.groq_chat(
                         [{"role": "system", "content": sp},
-                         {"role": "user", "content": up}],
+                        {"role": "user", "content": up}],
                         uid=uid, temperature=0.9, max_tokens=500)) or "[no response]"
                 except Exception as e:
                     await send_long(ch, f"⚠️ AI{n} error: {str(e)[:150]}")
@@ -2620,6 +2971,19 @@ class MacBot(commands.Bot):
                     return None
             placeholder_task = asyncio.create_task(_send_placeholder())
 
+        # ---------- auto-context fetch (only if enabled) ----------
+        auto_ctx: List[Tuple[str, str]] = []
+        if self.get_auto_context(uid) > 0:
+            src = source_message or trigger_msg
+            chan = getattr(src, "channel", None) or destination
+            exclude_id = getattr(src, "id", None)
+            try:
+                auto_ctx = await self._fetch_auto_context(
+                    chan, uid, exclude_message_id=exclude_id)
+            except Exception as e:
+                logger.warning(f"Auto-context failed: {e}")
+                auto_ctx = []
+
         # macro expansion
         macro_match = re.match(r'^\.(\w+)\s*(.*)$', clean_content)
         if macro_match:
@@ -2650,11 +3014,13 @@ class MacBot(commands.Bot):
                     return
                 augmented = (f"Web results for: {query}\n\n{results}\n\n---\n\n"
                              f"Summarize. Cite sources inline like [1], [2].")
-                response = await self.chat_call(augmented, uid=uid, max_tokens=800)
+                response = await self.chat_call(
+                    augmented, uid=uid, max_tokens=800,
+                    auto_context_messages=auto_ctx)
                 response = strip_think_tags(response)
                 self.append_to_slot(uid, slot_name, "user", clean_content)
                 self.append_to_slot(uid, slot_name, "assistant", response)
-                if self.get_persistent_enabled(uid):
+                if self.get_persistent_enabled(uid) and self.get_context_enabled(uid):
                     self.add_persistent_memory(uid, "user", clean_content)
                     self.add_persistent_memory(uid, "assistant", response)
                 if early_thinking:
@@ -2664,9 +3030,10 @@ class MacBot(commands.Bot):
                 return
 
         # record user turn
-        if self.get_persistent_enabled(uid):
+        if self.get_persistent_enabled(uid) and self.get_context_enabled(uid):
             self.add_persistent_memory(uid, "user", clean_content)
-        self.append_to_slot(uid, slot_name, "user", clean_content)
+        if self.get_context_enabled(uid):
+            self.append_to_slot(uid, slot_name, "user", clean_content)
 
         if placeholder_task:
             early_thinking = await placeholder_task
@@ -2684,7 +3051,7 @@ class MacBot(commands.Bot):
             oa = reply_context.get("author", "someone")
             oc = reply_context.get("content", "")
             base = self.mode_prompts.get(self.get_user_mode(uid),
-                                          self.mode_prompts["chill"])
+                                          self.mode_prompts["normal"])
             system_prompt = (f"{base}\n\nReplying to **{oa}**: \"{oc}\"\n"
                              f"User says: \"{clean_content}\"\nReact naturally. 1–3 sentences.")
         if images:
@@ -2694,11 +3061,13 @@ class MacBot(commands.Bot):
         try:
             response = await self.chat_call(
                 clean_content, uid=uid, system_prompt=system_prompt,
-                slot_name=slot_name, images=images)
+                slot_name=slot_name, images=images,
+                auto_context_messages=auto_ctx)
             response = strip_think_tags(response)
-            if self.get_persistent_enabled(uid):
+            if self.get_persistent_enabled(uid) and self.get_context_enabled(uid):
                 self.add_persistent_memory(uid, "assistant", response)
-            self.append_to_slot(uid, slot_name, "assistant", response)
+            if self.get_context_enabled(uid):
+                self.append_to_slot(uid, slot_name, "assistant", response)
 
             if early_thinking:
                 if len(response) <= DISCORD_LIMIT:
@@ -2712,7 +3081,8 @@ class MacBot(commands.Bot):
             else:
                 await send_long(destination, response)
 
-            if self.get_user_mode(uid) == "brainrot" or self.get_user_mode(uid) == "childish":
+            mode = self.get_user_mode(uid)
+            if mode in ("childish", "brainrot"):
                 try:
                     pool = self.get_gif_pool(uid)
                     await destination.send(random.choice(pool))
@@ -2738,7 +3108,8 @@ class MacBot(commands.Bot):
             submit_url = "https://api.siliconflow.com/v1/video/submit"
             status_url = "https://api.siliconflow.com/v1/video/status"
             api_key = SILICONFLOW_API_KEYS[self.siliconflow_key_index]
-            self.siliconflow_key_index = (self.siliconflow_key_index + 1) % len(SILICONFLOW_API_KEYS)
+            self.siliconflow_key_index = (
+                self.siliconflow_key_index + 1) % len(SILICONFLOW_API_KEYS)
             headers = {"Authorization": f"Bearer {api_key}",
                        "Content-Type": "application/json"}
             payload = {"model": "Wan-AI/Wan2.2-T2V-A14B",
@@ -2756,7 +3127,9 @@ class MacBot(commands.Bot):
                                     break
                             elif r.status == 429:
                                 api_key = SILICONFLOW_API_KEYS[self.siliconflow_key_index]
-                                self.siliconflow_key_index = (self.siliconflow_key_index + 1) % len(SILICONFLOW_API_KEYS)
+                                self.siliconflow_key_index = (
+                                    self.siliconflow_key_index + 1
+                                ) % len(SILICONFLOW_API_KEYS)
                                 headers["Authorization"] = f"Bearer {api_key}"
                                 await asyncio.sleep(2)
                     except Exception:
@@ -2783,7 +3156,8 @@ class MacBot(commands.Bot):
                                         data = await vr.read()
                                     await safe_edit(status_message, content="✅ **Video Ready!**")
                                     await safe_send(status_message.channel,
-                                                    file=discord.File(io.BytesIO(data), filename="video.mp4"))
+                                                    file=discord.File(io.BytesIO(data),
+                                                                      filename="video.mp4"))
                                     return
                             raise Exception("No video URL")
                         elif st == "Failed":
@@ -2815,7 +3189,8 @@ class MacBot(commands.Bot):
                                 raise Exception("Invalid audio")
                             await safe_edit(status_message, content="🎵 Ready")
                             await safe_send(status_message.channel,
-                                            file=discord.File(io.BytesIO(data), filename="music.mp3"))
+                                            file=discord.File(io.BytesIO(data),
+                                                              filename="music.mp3"))
                         else:
                             raise Exception(f"Bad content-type: {ct}")
                     else:
@@ -2892,37 +3267,6 @@ class MacBot(commands.Bot):
         self.loop.create_task(self._warmup_groq())
 
 
-# ======================================================================
-# END OF PART 1
-# ======================================================================
-# Part 2 (next message):
-#   - bot = MacBot()
-#   - Autocomplete callbacks
-#   - /mac (updated help)
-#   - /query /summarize /eli5 /roast /compliment
-#   - /personalize
-#   - /ping panel + /pa /pd
-#   - /src (soft, user-side, no confirm) + /re (hard, user-side, no confirm)
-#   - /cs group (profile, key, model, llm, ch, voice, voice-add, voice-del,
-#                voices, macro, gif, ping, placeholder, context, show, reset)
-#   - /profiles /benchmark /context
-#   - /sv1–/sv5 /svc /svclear /svlist /vsc /vsm
-#   - /chill /unhinged /coder /engineer /childish /dexter  (no /setmode)
-#   - /pipeline /project
-#   - /config
-#
-# Part 3 (after that):
-#   - /tts /render /rendermode /hf_model
-#   - /video
-#   - /music /play (with YouTube link support + Spotify dropdown)
-#   - /debate
-#   - /sm /persistent /persistentdisable /persistentreset
-#   - /court (button panel)
-#   - /umf (button panel, per-guild, no default nation, admin gate,
-#           /umf join + /umf manage)
-#   - on_message (GIF reply detection baked in, image editing)
-#   - Web server + main()
-# ======================================================================
 # ======================================================================
 # BOT INSTANCE
 # ======================================================================
@@ -3004,12 +3348,15 @@ async def _active_model_ac(i, c):
 async def mac_help(ctx):
     uid = ctx.author.id
     mode = bot.get_user_mode(uid)
+    auto_ctx = bot.get_auto_context(uid)
+    ctx_on = bot.get_context_enabled(uid)
     emb = discord.Embed(
-        title="🔥 Mac v24.0",
+        title="🔥 Mac v25.0",
         color=C_PRIMARY,
         description=(f"Your mode: **{mode}**\n"
-                     "Mention me, reply to me, or use slash commands.\n"
-                     "Per-user everything — modes, memory, keys, profiles."),
+                     f"Context: **{'ON' if ctx_on else 'OFF'}** · "
+                     f"Auto-reply-context: **{auto_ctx if auto_ctx else 'OFF'}**\n"
+                     "Mention me, reply to me, or use slash commands."),
     )
     emb.add_field(name="💬 Chat",
                   value="`@Mac <msg>` · `/query` · `/summarize` · `/eli5` · `/roast` · `/compliment`",
@@ -3017,6 +3364,11 @@ async def mac_help(ctx):
     emb.add_field(name="👁️ Vision + Edit",
                   value=("Attach or reply to an image/GIF → I describe it.\n"
                          "Attach/reply + `@Mac make him goth` → I edit the image."),
+                  inline=False)
+    emb.add_field(name="🎨 Generation",
+                  value=("`@Mac generate me an image of …`\n"
+                         "`@Mac generate me a tts saying …`\n"
+                         "`@Mac generate me a video of …`"),
                   inline=False)
     emb.add_field(name="🌐 Search",
                   value="`search <thing>` (or google / look up / find)",
@@ -3026,7 +3378,15 @@ async def mac_help(ctx):
     emb.add_field(name="🎭 Profiles",
                   value="`/profiles save|load|list|delete <name>`", inline=False)
     emb.add_field(name="🎭 Modes (per-user)",
-                  value="`/chill` `/unhinged` `/coder` `/engineer` `/childish` `/dexter`",
+                  value=("`/normal` (default, helpful) · `/chill` (agreeable)\n"
+                         "`/unhinged` `/coder` `/engineer` `/childish` `/dexter`"),
+                  inline=False)
+    emb.add_field(name="🧠 Context",
+                  value=("`/cs context on|off` — toggle slot + memory entirely\n"
+                         "`/cs autocontext <0–10>` — auto-read N recent msgs (default OFF)"),
+                  inline=False)
+    emb.add_field(name="📋 Compile",
+                  value="`/compile [count]` — pick messages and dump them into one file",
                   inline=False)
     emb.add_field(name="🔔 Ping/status",
                   value="`/ping` (button panel) · `/pa` `/pd`", inline=False)
@@ -3034,7 +3394,7 @@ async def mac_help(ctx):
                   value=("`/cs key` · `/cs model` · `/cs llm` · `/cs ch`\n"
                          "`/cs voice` / `voice-add` / `voice-del` / `voices`\n"
                          "`/cs macro` · `/cs gif`\n"
-                         "`/cs ping` · `/cs placeholder` · `/cs context`\n"
+                         "`/cs ping` · `/cs placeholder` · `/cs context` · `/cs autocontext`\n"
                          "`/cs show` · `/cs reset`"),
                   inline=False)
     emb.add_field(name="🗂️ Slots",
@@ -3048,21 +3408,19 @@ async def mac_help(ctx):
     emb.add_field(name="🏗️ Pipelines",
                   value="`/pipeline` · `/project`", inline=False)
     emb.add_field(name="🎵 Music",
-                  value="`/music` (VC panel) · `/play <song or Spotify/YT URL>`", inline=False)
+                  value="`/music` (VC panel with live position) · `/play <song or Spotify/YT URL>`",
+                  inline=False)
     emb.add_field(name="🖼️ Media",
                   value="`/render` · `/tts` · `/video` · `/rendermode` · `/hf_model`",
                   inline=False)
     emb.add_field(name="💬 Debate · 🏛️ Court",
                   value="`/debate` · `/court`", inline=False)
     emb.add_field(name="🌍 UMF (server-side)",
-                  value=("`/umf` — panel · `/umf join` — join a nation · "
-                         "`/umf manage` — manage your nation"),
+                  value="`/umf` — panel · `/umf_join` — join · `/umf_manage` — manage",
                   inline=False)
     emb.add_field(name="♻️ Resets",
-                  value="`/src` — soft reset (wipes your slots + memory, keeps /cs)\n"
-                        "`/re` — hard reset (wipes all your user-side data)",
-                  inline=False)
-    emb.set_footer(text="v24.0 — per-user modes · markdown-aware chunks · image edit")
+                  value="`/src` — soft reset · `/re` — hard reset", inline=False)
+    emb.set_footer(text="v25.0 — normal/chill modes · toggleable context · Klipy · live music position")
     await ctx.send(embed=emb)
 
 
@@ -3211,6 +3569,13 @@ class PingPanelView(discord.ui.View):
         emb.add_field(name="Your placeholder", value=ph, inline=True)
         emb.add_field(name="Your mode", value=f"`{bot.get_user_mode(self.uid)}`",
                       inline=True)
+        auto_ctx = bot.get_auto_context(self.uid)
+        emb.add_field(name="Auto-context",
+                      value=f"{auto_ctx} msgs" if auto_ctx else "OFF",
+                      inline=True)
+        emb.add_field(name="Context",
+                      value="ON" if bot.get_context_enabled(self.uid) else "OFF",
+                      inline=True)
         emb.set_footer(text="Click a button to change ping mode")
         return emb
 
@@ -3252,7 +3617,7 @@ async def pd_cmd(ctx):
 
 
 # ======================================================================
-# RESETS — user-side, no confirm
+# RESETS
 # ======================================================================
 @bot.hybrid_command(
     name="src",
@@ -3290,16 +3655,25 @@ async def re_cmd(ctx):
 
 
 # ======================================================================
-# MODES (per-user, no /setmode)
+# MODES
 # ======================================================================
 def _mode_switch_response(mode: str) -> str:
-    emoji = {"chill": "😎", "unhinged": "🔥", "coder": "💻",
-             "engineer": "🛠️", "childish": "🧒", "dexter": "🔪"}.get(mode, "🎭")
+    emoji = {"normal": "🧠", "chill": "😎", "unhinged": "🔥",
+             "coder": "💻", "engineer": "🛠️", "childish": "🧒",
+             "dexter": "🔪"}.get(mode, "🎭")
     extra = " — GIFs on every reply." if mode in ("brainrot", "childish") else ""
     return f"{emoji} Your mode → **{mode}**{extra}"
 
 
-@bot.hybrid_command(name="chill", description="😎 Set YOUR mode to chill")
+@bot.hybrid_command(name="normal",
+                    description="🧠 Set YOUR mode to normal (default — helpful + chill personality)")
+async def mode_normal(ctx):
+    bot.set_user_mode(ctx.author.id, "normal")
+    await ctx.send(_mode_switch_response("normal"), ephemeral=True)
+
+
+@bot.hybrid_command(name="chill",
+                    description="😎 Set YOUR mode to chill (extra agreeable — yes to everything)")
 async def mode_chill(ctx):
     bot.set_user_mode(ctx.author.id, "chill")
     await ctx.send(_mode_switch_response("chill"), ephemeral=True)
@@ -3329,10 +3703,169 @@ async def mode_childish(ctx):
     await ctx.send(_mode_switch_response("childish"), ephemeral=True)
 
 
-@bot.hybrid_command(name="dexter", description="🔪 Set YOUR mode to dexter (cold-reading mentalist)")
+@bot.hybrid_command(name="dexter",
+                    description="🔪 Set YOUR mode to dexter (cold-reading mentalist)")
 async def mode_dexter(ctx):
     bot.set_user_mode(ctx.author.id, "dexter")
     await ctx.send(_mode_switch_response("dexter"), ephemeral=True)
+
+
+# ======================================================================
+# /compile — fetch messages, pick which to include, dump into one file
+# ======================================================================
+class CompileSelectModal(discord.ui.Modal, title="📋 Which messages?"):
+    selection = discord.ui.TextInput(
+        label="Message numbers",
+        placeholder="e.g. 1,3,5-10,15  (or 'all')",
+        required=True, max_length=400)
+
+    def __init__(self, messages: List[discord.Message], original_uid: int):
+        super().__init__()
+        self.messages = messages
+        self.original_uid = original_uid
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != self.original_uid:
+            return await interaction.response.send_message(
+                "❌ Not your compile.", ephemeral=True)
+        raw = self.selection.value.strip().lower()
+        n = len(self.messages)
+        chosen: List[int] = []
+        if raw in ("all", "*", "everything"):
+            chosen = list(range(1, n + 1))
+        else:
+            for part in re.split(r'[,\s]+', raw):
+                if not part:
+                    continue
+                m = re.match(r'^(\d+)\s*-\s*(\d+)$', part)
+                if m:
+                    a, b = int(m.group(1)), int(m.group(2))
+                    if a > b:
+                        a, b = b, a
+                    chosen.extend(range(a, b + 1))
+                elif part.isdigit():
+                    chosen.append(int(part))
+        chosen = sorted({i for i in chosen if 1 <= i <= n})
+        if not chosen:
+            return await interaction.response.send_message(
+                "❌ No valid message numbers matched.", ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True)
+
+        lines = []
+        for i in chosen:
+            msg = self.messages[i - 1]
+            ts = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            author = f"{msg.author.display_name} ({msg.author.id})"
+            body = (msg.content or "").strip()
+            attachments = ""
+            if msg.attachments:
+                attachments = "\n  [attachments: " + ", ".join(
+                    a.filename for a in msg.attachments) + "]"
+            lines.append(f"[{i}] {ts} — {author}\n{body}{attachments}\n")
+
+        compiled = "\n".join(lines)
+        header = (f"# Compilation from #{getattr(interaction.channel, 'name', 'channel')}\n"
+                  f"# {len(chosen)} messages · generated {datetime.now().isoformat()}\n\n")
+        compiled_full = header + compiled
+
+        buf = io.BytesIO(compiled_full.encode("utf-8"))
+        fname = f"compile-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+        try:
+            await interaction.followup.send(
+                content=f"📦 **{len(chosen)} messages** compiled · "
+                        f"{len(compiled_full):,} chars",
+                file=discord.File(buf, filename=fname),
+                ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Upload failed: {e}", ephemeral=True)
+            return
+
+        # Also send inline chunks to the channel if it's short enough
+        if len(compiled_full) <= 18000:
+            for chunk in chunk_text(compiled_full, 1990)[:10]:
+                await safe_send(interaction.channel, content=chunk)
+
+
+class CompileStartView(discord.ui.View):
+    def __init__(self, uid: int, messages: List[discord.Message]):
+        super().__init__(timeout=600)
+        self.uid = uid
+        self.messages = messages
+
+    @discord.ui.button(label="Select Messages", emoji="✅",
+                       style=discord.ButtonStyle.success)
+    async def select_btn(self, i, b):
+        if i.user.id != self.uid:
+            return await i.response.send_message("❌ Not yours.", ephemeral=True)
+        await i.response.send_modal(CompileSelectModal(self.messages, self.uid))
+
+    @discord.ui.button(label="Compile All", emoji="📦",
+                       style=discord.ButtonStyle.primary)
+    async def all_btn(self, i, b):
+        if i.user.id != self.uid:
+            return await i.response.send_message("❌ Not yours.", ephemeral=True)
+        await i.response.defer(ephemeral=True)
+
+        lines = []
+        for idx, msg in enumerate(self.messages, 1):
+            ts = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            author = f"{msg.author.display_name} ({msg.author.id})"
+            body = (msg.content or "").strip()
+            lines.append(f"[{idx}] {ts} — {author}\n{body}\n")
+        compiled = "\n".join(lines)
+        header = (f"# Compilation from #{getattr(i.channel, 'name', 'channel')}\n"
+                  f"# {len(self.messages)} messages · "
+                  f"generated {datetime.now().isoformat()}\n\n")
+        full = header + compiled
+        buf = io.BytesIO(full.encode("utf-8"))
+        fname = f"compile-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+        await i.followup.send(
+            content=f"📦 **{len(self.messages)} messages** · {len(full):,} chars",
+            file=discord.File(buf, filename=fname), ephemeral=True)
+        if len(full) <= 18000:
+            for chunk in chunk_text(full, 1990)[:10]:
+                await safe_send(i.channel, content=chunk)
+
+
+@bot.hybrid_command(
+    name="compile",
+    description="📋 Compile recent channel messages into one file (pick which ones)")
+@app_commands.describe(
+    count="How many recent messages to fetch (default 50, max 200)",
+    channel="Optional: compile from a different channel")
+async def compile_cmd(ctx, count: int = 50, channel: discord.TextChannel = None):
+    count = max(1, min(200, count))
+    target = channel or ctx.channel
+    await ctx.defer(ephemeral=True)
+
+    try:
+        msgs: List[discord.Message] = []
+        async for m in target.history(limit=count):
+            msgs.append(m)
+        msgs.reverse()  # oldest first
+    except Exception as e:
+        return await ctx.send(f"❌ Couldn't read history: {e}", ephemeral=True)
+
+    if not msgs:
+        return await ctx.send("📭 No messages found.", ephemeral=True)
+
+    preview_lines = []
+    for i, m in enumerate(msgs[:25], 1):
+        body = (m.content or "[no text]").replace("\n", " ")[:90]
+        preview_lines.append(f"`{i}` **{m.author.display_name}**: {body}")
+    preview = "\n".join(preview_lines)
+    more = f"\n-# …and {len(msgs) - 25} more" if len(msgs) > 25 else ""
+
+    emb = discord.Embed(
+        title=f"📋 Compile — {len(msgs)} messages from #{target.name}",
+        description=preview + more,
+        color=C_PRIMARY)
+    emb.set_footer(text="Click 'Select Messages' to pick which ones, or 'Compile All'")
+
+    await ctx.send(embed=emb,
+                   view=CompileStartView(ctx.author.id, msgs),
+                   ephemeral=True)
 
 
 # ======================================================================
@@ -3340,7 +3873,7 @@ async def mode_dexter(ctx):
 # ======================================================================
 @bot.hybrid_group(
     name="cs",
-    description="⚙️ Customization — profile, keys, models, voices, macros, GIFs, ping, placeholder, context",
+    description="⚙️ Customization — profile, keys, models, voices, macros, GIFs, ping, context",
     invoke_without_command=True)
 async def cs_group(ctx):
     emb = discord.Embed(title="⚙️ /cs — Customization",
@@ -3363,6 +3896,8 @@ async def cs_group(ctx):
     emb.add_field(name="Ping · Placeholder",
                   value="`/cs ping` · `/cs placeholder`", inline=False)
     emb.add_field(name="Context",
+                  value="`/cs context on|off` · `/cs autocontext <0–10>`", inline=False)
+    emb.add_field(name="Context Inspector",
                   value="`/cs context <message_id or link> [before] [after]`",
                   inline=False)
     emb.add_field(name="Misc", value="`/cs show` · `/cs reset [section]`", inline=False)
@@ -3703,12 +4238,54 @@ async def cs_placeholder(ctx, enabled: bool = None):
     await ctx.send(f"✅ Placeholder → **{'ON' if enabled else 'OFF'}**", ephemeral=True)
 
 
-@cs_group.command(name="context", description="📜 Show N messages before/after a given message")
+@cs_group.command(
+    name="context",
+    description="🧠 Toggle whether Mac uses your slot + persistent memory as context")
+@app_commands.describe(enabled="True = ON (default). False = OFF (fresh each message)")
+async def cs_context_toggle(ctx, enabled: bool = None):
+    uid = ctx.author.id
+    if enabled is None:
+        on = bot.get_context_enabled(uid)
+        return await ctx.send(
+            f"Context: **{'ON' if on else 'OFF'}**\n"
+            "ON = include your slot history + persistent memory with each reply\n"
+            "OFF = Mac sees only your current message\n\n"
+            "To auto-read recent *channel* messages too, use `/cs autocontext`.",
+            ephemeral=True)
+    bot.set_context_enabled(uid, enabled)
+    await ctx.send(
+        f"✅ Context → **{'ON' if enabled else 'OFF'}**", ephemeral=True)
+
+
+@cs_group.command(
+    name="autocontext",
+    description="📡 Auto-read N recent channel messages with every reply (0 = off, 3–10)")
+@app_commands.describe(count="0 disables. 3–10 enables. Default is 0 (OFF).")
+async def cs_autocontext(ctx, count: int = None):
+    uid = ctx.author.id
+    if count is None:
+        cur = bot.get_auto_context(uid)
+        return await ctx.send(
+            f"Auto-context: **{cur if cur else 'OFF'}**\n"
+            "When enabled, Mac reads the last N messages *in the channel* "
+            "before replying to you — helps him follow ongoing conversations.\n"
+            "Default is OFF (0). Range: 3–10.",
+            ephemeral=True)
+    bot.set_auto_context(uid, count)
+    new = bot.get_auto_context(uid)
+    if new == 0:
+        await ctx.send("✅ Auto-context → **OFF**", ephemeral=True)
+    else:
+        await ctx.send(f"✅ Auto-context → **last {new} messages**", ephemeral=True)
+
+
+@cs_group.command(name="inspector",
+                  description="📜 Show N messages before/after a given message")
 @app_commands.describe(
     message="Message ID, or a jump link to any message",
     before="How many messages before (default 3, max 10)",
     after="How many messages after (default 3, max 10)")
-async def cs_context(ctx, message: str, before: int = 3, after: int = 3):
+async def cs_inspector(ctx, message: str, before: int = 3, after: int = 3):
     before = max(0, min(CONTEXT_WINDOW_LIMIT, before))
     after = max(0, min(CONTEXT_WINDOW_LIMIT, after))
 
@@ -3782,6 +4359,11 @@ async def cs_show(ctx):
     emb.add_field(name="Ping", value=f"`{bot.get_ping_pref(uid)}`", inline=True)
     emb.add_field(name="Placeholder",
                   value="ON" if bot.get_placeholder_pref(uid) else "OFF", inline=True)
+    emb.add_field(name="Context",
+                  value="ON" if bot.get_context_enabled(uid) else "OFF", inline=True)
+    auto_ctx = bot.get_auto_context(uid)
+    emb.add_field(name="Auto-context",
+                  value=f"{auto_ctx} msgs" if auto_ctx else "OFF", inline=True)
     prof = u.get("profile", {})
     if prof:
         emb.add_field(name="Profile",
@@ -3819,7 +4401,7 @@ async def cs_show(ctx):
 
 
 @cs_group.command(name="reset", description="Reset a section of your customizations")
-@app_commands.describe(section="profile | keys | models | aliases | voices | macros | gifs | all")
+@app_commands.describe(section="profile | keys | models | aliases | voices | macros | gifs | context | all")
 async def cs_reset(ctx, section: str = "all"):
     uid = ctx.author.id
     s = section.lower()
@@ -3838,8 +4420,12 @@ async def cs_reset(ctx, section: str = "all"):
     elif s == "voices": u.pop("voices", None)
     elif s == "macros": u.pop("macros", None)
     elif s == "gifs": u.pop("brainrot_gifs", None)
+    elif s == "context":
+        u.pop("context_enabled", None); u.pop("auto_context", None)
     else:
-        return await ctx.send("❌ Options: profile, keys, models, aliases, voices, macros, gifs, all")
+        return await ctx.send(
+            "❌ Options: profile, keys, models, aliases, voices, macros, "
+            "gifs, context, all")
     bot._save_cs()
     await ctx.send(f"🧹 Reset `{s}`.")
 
@@ -3931,6 +4517,11 @@ async def context_cmd(ctx, message: str = "hello"):
     emb.add_field(name="User", value=f"{stats['user']:,}", inline=True)
     emb.add_field(name="Assistant", value=f"{stats['assistant']:,}", inline=True)
     emb.add_field(name="Messages", value=str(stats['messages']), inline=True)
+    ctx_on = bot.get_context_enabled(uid)
+    auto_ctx = bot.get_auto_context(uid)
+    emb.add_field(name="Context", value="ON" if ctx_on else "OFF", inline=True)
+    emb.add_field(name="Auto-context",
+                  value=f"{auto_ctx} msgs" if auto_ctx else "OFF", inline=True)
     await ctx.send(embed=emb, ephemeral=True)
 
 
@@ -4058,7 +4649,9 @@ async def vsm_cmd(ctx, private: bool = True, limit: int = 20):
         prefix = "🧑" if role == "user" else "🤖"
         lines.append(f"{prefix} {content.replace(chr(10), ' ')[:200]}")
     enabled = "ON" if bot.get_persistent_enabled(uid) else "OFF"
-    header = f"🧠 **Persistent memory** ({enabled}) — last {len(recent)} of {len(mem)}\n\n"
+    ctx_on = "ON" if bot.get_context_enabled(uid) else "OFF"
+    header = (f"🧠 **Persistent memory** (mem {enabled} · context {ctx_on}) "
+              f"— last {len(recent)} of {len(mem)}\n\n")
     full = header + "\n".join(lines)
     if private:
         chunks = chunk_text(full, 1900)
@@ -4116,6 +4709,11 @@ async def config_cmd(ctx):
     emb.add_field(name="Your mode", value=f"`{bot.get_user_mode(uid)}`", inline=True)
     emb.add_field(name="Image mode", value=f"`{bot.current_image_mode}`", inline=True)
     emb.add_field(name="Memory", value="ON" if bot.memory_enabled else "OFF", inline=True)
+    emb.add_field(name="Context",
+                  value="ON" if bot.get_context_enabled(uid) else "OFF", inline=True)
+    auto_ctx = bot.get_auto_context(uid)
+    emb.add_field(name="Auto-context",
+                  value=f"{auto_ctx} msgs" if auto_ctx else "OFF", inline=True)
     emb.add_field(name="Groq model",
                   value=f"`{bot.current_model(uid, 'groq') or GLOBAL_GROQ_MODELS[0]}`",
                   inline=True)
@@ -4138,17 +4736,17 @@ async def config_cmd(ctx):
 # ======================================================================
 # END OF PART 2
 # ======================================================================
-# Part 3 (next message):
-#   - /tts /render /rendermode /hf_model
-#   - /video
-#   - /music /play (with YouTube link support + Spotify dropdown)
+# Part 3 (final) will contain:
+#   - /tts /render /rendermode /hf_model /video
+#   - Music (Klipy-free playback, wide panel, live 0:38 / 1:39 position,
+#           auto-refresh every 15 s, /play adds to the same queue)
 #   - /debate
 #   - /sm /persistent /persistentdisable /persistentreset
-#   - /court (button panel)
-#   - /umf (button panel + /umf join + /umf manage, no default nation,
-#           admin gate for admin panel)
-#   - on_message (GIF reply detection + image edit detection)
-#   - Web server + main()
+#   - /court
+#   - /umf (panel + join + manage)
+#   - on_message — natural-language generation, Klipy GIFs, image edit,
+#     auto-context trigger, music position trigger
+#   - web server + main()
 # ======================================================================
 # ======================================================================
 # TTS
@@ -4262,8 +4860,7 @@ async def video_cmd(ctx, prompt: str):
 
 
 # ======================================================================
-# MUSIC — Spotify search + yt-dlp full-track playback
-# Live autocomplete dropdown · YouTube URL support · Join VC button
+# MUSIC — wide panel, live position, auto-refresh, unified queue
 # ======================================================================
 import yt_dlp
 
@@ -4280,7 +4877,6 @@ _YTDL_OPTS = {
 
 
 def _yt_extract_sync(target: str, limit: int = 1) -> List[dict]:
-    """Blocking yt-dlp. Works for URLs and search strings."""
     try:
         opts = dict(_YTDL_OPTS)
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -4335,7 +4931,7 @@ def _yt_entry_to_track(entry: dict, meta_override: Optional[dict] = None) -> Opt
     }
 
 
-# ---------- Spotify (metadata) ----------
+# ---------- Spotify metadata ----------
 _SPOTIFY_TOKEN: Optional[str] = None
 _SPOTIFY_TOKEN_EXP: float = 0.0
 
@@ -4422,7 +5018,6 @@ async def resolve_spotify_url(url: str) -> Optional[dict]:
 async def search_music_full(query: str, limit: int = 10) -> List[dict]:
     q = query.strip()
 
-    # ---- YouTube URL (single video or playlist) ----
     if q.startswith(("https://youtu.be/", "https://www.youtube.com/",
                      "https://youtube.com/", "https://music.youtube.com/")):
         entries = await yt_resolve(q, limit=limit)
@@ -4436,7 +5031,6 @@ async def search_music_full(query: str, limit: int = 10) -> List[dict]:
                 tracks.append(t)
         return tracks
 
-    # ---- Spotify URL ----
     sp = re.search(
         r'https?://open\.spotify\.com/(?:intl-\w+/)?(track|album|playlist)/(\w+)',
         q)
@@ -4457,7 +5051,6 @@ async def search_music_full(query: str, limit: int = 10) -> List[dict]:
                 tracks.append(t)
         return tracks
 
-    # ---- Plain text search ----
     spotify_hits: List[dict] = []
     if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
         spotify_hits = await spotify_search_tracks(q, limit=limit)
@@ -4495,10 +5088,12 @@ async def search_music_full(query: str, limit: int = 10) -> List[dict]:
     return yt_tracks[:limit]
 
 
-# ---------- Session state ----------
+# ---------- Session ----------
 class MusicSession:
     __slots__ = ("guild_id", "text_channel_id", "voice_client",
-                 "queue", "current", "loop_mode", "volume")
+                 "queue", "current", "loop_mode", "volume",
+                 "panel_message", "update_task",
+                 "play_start", "pause_start", "accumulated_pause")
 
     def __init__(self, guild_id: int):
         self.guild_id = guild_id
@@ -4508,6 +5103,11 @@ class MusicSession:
         self.current: Optional[dict] = None
         self.loop_mode: str = "off"
         self.volume: float = 1.0
+        self.panel_message: Optional[discord.Message] = None
+        self.update_task: Optional[asyncio.Task] = None
+        self.play_start: Optional[float] = None
+        self.pause_start: Optional[float] = None
+        self.accumulated_pause: float = 0.0
 
 
 def _get_music_session(guild_id: int) -> MusicSession:
@@ -4517,48 +5117,93 @@ def _get_music_session(guild_id: int) -> MusicSession:
 
 
 def _loop_label(mode: str) -> str:
-    return {"off": "➡️ Off", "track": "🔂 Track",
-            "queue": "🔁 Queue", "24_7": "♾️ 24/7"}.get(mode, "➡️ Off")
+    return {"off": "Off", "track": "Track", "queue": "Queue",
+            "24_7": "24/7"}.get(mode, "Off")
 
 
 def _fmt_duration(ms: Optional[int]) -> str:
     if not ms:
         return ""
-    secs = ms // 1000
+    return _fmt_seconds(ms / 1000)
+
+
+def _fmt_seconds(secs: float) -> str:
+    secs = max(0, int(secs))
     h, r = divmod(secs, 3600)
     m, s = divmod(r, 60)
-    if h:
-        return f"{h}:{m:02d}:{s:02d}"
-    return f"{m}:{s:02d}"
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _get_position_seconds(session: MusicSession) -> float:
+    if session.play_start is None:
+        return 0.0
+    now = session.pause_start if session.pause_start else time.time()
+    return max(0.0, now - session.play_start - session.accumulated_pause)
+
+
+def _progress_bar(pos: float, total: float, width: int = 16) -> str:
+    if not total or total <= 0:
+        return "▬" * width
+    pct = min(1.0, max(0.0, pos / total))
+    filled = min(int(pct * (width - 1)), width - 1)
+    return "▬" * filled + "🔘" + "▬" * (width - filled - 1)
 
 
 def _music_panel_embed(session: MusicSession) -> discord.Embed:
-    emb = discord.Embed(title="🎵 Music Panel", color=C_PRIMARY)
+    emb = discord.Embed(color=C_MUSIC)
+    emb.title = "🎵   Music Panel"
+
     cur = session.current
     if cur:
-        emb.add_field(
-            name="Now playing",
-            value=f"**{cur['title']}**\n{cur['artist']}\n*{cur.get('source','?')}*",
-            inline=False)
+        pos = _get_position_seconds(session)
+        total = (cur.get("duration_ms") or 0) / 1000
+        vc = session.voice_client
+        is_paused = bool(vc and vc.is_paused())
+        state = "⏸️  Paused" if is_paused else "▶️  Playing"
+
+        if total > 0:
+            bar = _progress_bar(pos, total, width=18)
+            timing = f"`{_fmt_seconds(pos)}`  {bar}  `{_fmt_seconds(total)}`"
+        else:
+            timing = f"`{_fmt_seconds(pos)}`  " + "▬" * 18
+
+        src = cur.get("source", "?").capitalize()
+        emb.description = (
+            f"### {state}\n"
+            f"**{cur['title']}**\n"
+            f"-# {cur['artist']}   ·   *{src}*\n"
+            f"\n{timing}"
+        )
+        if cur.get("thumb"):
+            emb.set_thumbnail(url=cur["thumb"])
     else:
-        emb.add_field(name="Now playing", value="*(nothing)*", inline=False)
+        emb.description = (
+            "### 💤  Nothing playing\n"
+            "-# Use the **🔎 Search** button or `/play <song>` to add a track."
+        )
 
     if session.queue:
         lines = []
-        for i, t in enumerate(session.queue[:5], 1):
+        for i, t in enumerate(session.queue[:6], 1):
             dur = _fmt_duration(t.get("duration_ms"))
-            lines.append(f"{i}. **{t['title'][:55]}** — {t['artist'][:30]}"
-                         + (f" · `{dur}`" if dur else ""))
-        if len(session.queue) > 5:
-            lines.append(f"…and {len(session.queue) - 5} more")
-        emb.add_field(name=f"Queue ({len(session.queue)})",
+            d = f"   `{dur}`" if dur else ""
+            lines.append(f"`{i:>2}.` **{t['title'][:55]}**\n"
+                         f"-#    {t['artist'][:40]}{d}")
+        if len(session.queue) > 6:
+            lines.append(f"-# …and {len(session.queue) - 6} more")
+        emb.add_field(name=f"📋   Up Next   ·   {len(session.queue)} in queue",
                       value="\n".join(lines), inline=False)
+    else:
+        emb.add_field(name="📋   Up Next",
+                      value="-# Queue is empty", inline=False)
 
-    emb.add_field(name="Loop", value=_loop_label(session.loop_mode), inline=True)
-    emb.add_field(name="Volume", value=f"{int(session.volume * 100)}%", inline=True)
-    emb.add_field(name="Voice",
-                  value="✅" if _VOICE_LIB_OK else "❌ (missing libs)", inline=True)
-    emb.set_footer(text="🔎 Search · ⏯️ Pause · ⏭️ Skip · ⏹️ Stop · 🔁 Loop · 👋 Leave")
+    footer_bits = [
+        f"🔁 {_loop_label(session.loop_mode)}",
+        f"🔊 {int(session.volume * 100)}%",
+    ]
+    if not _VOICE_LIB_OK:
+        footer_bits.append("⚠️ voice libs missing")
+    emb.set_footer(text="   ·   ".join(footer_bits))
     return emb
 
 
@@ -4579,6 +5224,7 @@ def _play_next(guild_id: int):
     if not session or not session.voice_client:
         return
     vc = session.voice_client
+
     if session.loop_mode == "track" and session.current:
         next_track = session.current
     elif session.queue:
@@ -4590,11 +5236,17 @@ def _play_next(guild_id: int):
         next_track = session.current
     else:
         session.current = None
+        session.play_start = None
+        session.pause_start = None
+        session.accumulated_pause = 0.0
         return
 
     if not next_track or not next_track.get("stream_url"):
         return _play_next(guild_id)
     session.current = next_track
+    session.play_start = time.time()
+    session.pause_start = None
+    session.accumulated_pause = 0.0
 
     def _after(err):
         if err:
@@ -4617,6 +5269,58 @@ def _play_next(guild_id: int):
         logger.error(f"Play failed: {e}")
         session.current = None
         _play_next(guild_id)
+
+
+async def _music_panel_loop(guild_id: int):
+    """
+    Refresh the panel while it needs to stay live.
+      - playing/paused → every 15 s (position bar updates)
+      - idle, but connected → every 60 s (cheap, just volume/queue changes)
+      - not connected, or no panel message → exit entirely
+    """
+    while True:
+        session = bot.music_sessions.get(guild_id)
+        if session is None or session.panel_message is None:
+            return
+
+        vc = session.voice_client
+        connected = bool(vc and vc.is_connected())
+        active = bool(connected and (vc.is_playing() or vc.is_paused()))
+
+        if not connected and not session.queue and not session.current:
+            # nothing to show — stop ticking
+            return
+
+        await asyncio.sleep(15 if active else 60)
+
+        # Re-check after the sleep; things may have changed
+        session = bot.music_sessions.get(guild_id)
+        if session is None or session.panel_message is None:
+            return
+
+        try:
+            await session.panel_message.edit(embed=_music_panel_embed(session))
+        except (discord.NotFound, discord.Forbidden):
+            session.panel_message = None
+            return
+        except discord.HTTPException:
+            # transient — keep going, but don't hammer
+            await asyncio.sleep(30)
+
+
+def _ensure_panel_updater(session: MusicSession):
+    if session.update_task and not session.update_task.done():
+        return
+    session.update_task = bot.loop.create_task(_music_panel_loop(session.guild_id))
+
+
+async def _refresh_panel(session: MusicSession):
+    if session.panel_message is None:
+        return
+    try:
+        await session.panel_message.edit(embed=_music_panel_embed(session))
+    except (discord.NotFound, discord.HTTPException, discord.Forbidden):
+        session.panel_message = None
 
 
 # ---------- Autocomplete ----------
@@ -4724,7 +5428,6 @@ async def play_cmd(ctx: commands.Context, query: str):
     else:
         search_term = query.strip()
 
-    # ---- Resolve plain text into a select view ----
     if track is None:
         if not search_term:
             return await ctx.send("❌ Nothing to search.")
@@ -4736,7 +5439,7 @@ async def play_cmd(ctx: commands.Context, query: str):
         emb = discord.Embed(
             title=f"🔎 Results for: {search_term[:100]}",
             description="Select a track below.",
-            color=C_PRIMARY)
+            color=C_MUSIC)
         lines = []
         for i, r in enumerate(results[:10], 1):
             icon = "🎧" if r.get("source") == "spotify" else "▶️"
@@ -4776,6 +5479,7 @@ async def play_cmd(ctx: commands.Context, query: str):
         emb.set_thumbnail(url=track["thumb"])
     await ctx.send(embed=emb)
 
+    await _refresh_panel(session)
     if session.voice_client and not session.voice_client.is_playing():
         _play_next(ctx.guild.id)
 
@@ -4826,6 +5530,7 @@ class _PlayResultSelect(discord.ui.Select):
                 f"❌ Couldn't join voice: {e}", ephemeral=True)
         await interaction.response.send_message(
             f"➕ Queued **{track['title']}** — {track['artist']}", ephemeral=True)
+        await _refresh_panel(session)
         if session.voice_client and not session.voice_client.is_playing():
             _play_next(interaction.guild.id)
 
@@ -4835,7 +5540,7 @@ class _MusicSearchModal(discord.ui.Modal, title="🔎 Search a song"):
     q = discord.ui.TextInput(label="Song name", required=True, max_length=120)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         results = await search_music_full(self.q.value.strip(), limit=10)
         if not results:
             return await interaction.followup.send("❌ No results.", ephemeral=True)
@@ -4883,6 +5588,7 @@ class _MusicResultSelect(discord.ui.Select):
                 f"❌ Couldn't join voice: {e}", ephemeral=True)
         await interaction.response.send_message(
             f"➕ Queued **{track['title']}** — {track['artist']}", ephemeral=True)
+        await _refresh_panel(session)
         if session.voice_client and not session.voice_client.is_playing():
             _play_next(interaction.guild.id)
 
@@ -4907,14 +5613,19 @@ class _MusicPanelView(discord.ui.View):
                                                             ephemeral=True)
         if vc.is_playing():
             vc.pause()
+            s.pause_start = time.time()
             await interaction.response.send_message("⏸️ Paused.", ephemeral=True)
         elif vc.is_paused():
             vc.resume()
+            if s.pause_start is not None:
+                s.accumulated_pause += time.time() - s.pause_start
+                s.pause_start = None
             await interaction.response.send_message("▶️ Resumed.", ephemeral=True)
         else:
             if s.queue or s.current:
                 _play_next(interaction.guild.id)
             await interaction.response.send_message("▶️ Playing.", ephemeral=True)
+        await _refresh_panel(s)
 
     @discord.ui.button(label="Skip", emoji="⏭️",
                        style=discord.ButtonStyle.secondary, row=0)
@@ -4937,6 +5648,9 @@ class _MusicPanelView(discord.ui.View):
         s.queue.clear()
         s.current = None
         s.loop_mode = "off"
+        s.play_start = None
+        s.pause_start = None
+        s.accumulated_pause = 0.0
         vc = s.voice_client
         if vc and (vc.is_playing() or vc.is_paused()):
             vc.stop()
@@ -4975,12 +5689,11 @@ class _MusicPanelView(discord.ui.View):
                 pass
         await interaction.response.edit_message(embed=_music_panel_embed(s), view=self)
 
-    @discord.ui.button(label="Queue", emoji="📜",
+    @discord.ui.button(label="Refresh", emoji="🔄",
                        style=discord.ButtonStyle.secondary, row=1)
-    async def queue_btn(self, interaction, button):
+    async def refresh_btn(self, interaction, button):
         s = _get_music_session(interaction.guild.id)
-        await interaction.response.send_message(embed=_music_panel_embed(s),
-                                                ephemeral=True)
+        await interaction.response.edit_message(embed=_music_panel_embed(s), view=self)
 
     @discord.ui.button(label="Join My VC", emoji="🔊",
                        style=discord.ButtonStyle.success, row=2)
@@ -5015,15 +5728,19 @@ class _MusicPanelView(discord.ui.View):
         s = _get_music_session(interaction.guild.id)
         s.queue.clear()
         s.current = None
+        s.play_start = None
+        s.pause_start = None
+        s.accumulated_pause = 0.0
         vc = s.voice_client
         if vc and vc.is_connected():
             await vc.disconnect()
         s.voice_client = None
         await interaction.response.send_message("👋 Left voice.", ephemeral=True)
+        await _refresh_panel(s)
 
 
 @bot.hybrid_command(name="music",
-                    description="🎵 Music panel — search, queue, loop, join/leave VC")
+                    description="🎵 Music panel — search, queue, loop, live position")
 async def music_panel_cmd(ctx):
     if not ctx.guild:
         return await ctx.send("Servers only.", ephemeral=True)
@@ -5038,8 +5755,13 @@ async def music_panel_cmd(ctx):
             except Exception as e:
                 logger.warning(f"Auto-join failed: {e}")
 
-    await ctx.send(embed=_music_panel_embed(session),
-                   view=_MusicPanelView(ctx.guild.id))
+    msg = await ctx.send(embed=_music_panel_embed(session),
+                         view=_MusicPanelView(ctx.guild.id))
+    try:
+        session.panel_message = await msg.fetch()
+    except Exception:
+        session.panel_message = msg
+    _ensure_panel_updater(session)
 
 
 # ======================================================================
@@ -5096,7 +5818,7 @@ async def persistent_reset(ctx, target_user: discord.User):
 
 
 # ======================================================================
-# COURT — button panel
+# COURT
 # ======================================================================
 class CourtRoleView(discord.ui.View):
     def __init__(self, bot_instance):
@@ -5232,7 +5954,7 @@ async def court_cmd(ctx):
 
 
 # ======================================================================
-# UMF — per-guild, button panel, no default nation
+# UMF
 # ======================================================================
 class UMFNationCreateModal(discord.ui.Modal, title="🌍 Create your Nation"):
     nation_name = discord.ui.TextInput(
@@ -5257,7 +5979,7 @@ class UMFNationCreateModal(discord.ui.Modal, title="🌍 Create your Nation"):
         if existing:
             return await interaction.response.send_message(
                 f"❌ You're already in **{existing['name']}**. "
-                f"Leave first with `/umf manage`.", ephemeral=True)
+                f"Leave first with `/umf_manage`.", ephemeral=True)
         nation = bot.umf_data.add_nation(guild_id, name, interaction.user.id)
         emb = discord.Embed(title="✅ Nation Created",
                             description=f"**{nation['name']}** now exists.",
@@ -5559,101 +6281,8 @@ async def umf_manage_cmd(ctx):
 
 
 # ======================================================================
-# ON_MESSAGE — GIF / image detect + image edit + normal chat
+# ON_MESSAGE
 # ======================================================================
-_GIF_URL_RE = re.compile(
-    r'https?://\S+\.(?:gif|mp4)(?:\?\S*)?|'
-    r'https?://(?:www\.)?(?:tenor\.com|giphy\.com|klipy\.com|media\.discordapp\.net)/\S+',
-    re.IGNORECASE)
-
-
-def _looks_like_gif_request(text: str) -> bool:
-    low = text.lower()
-    keys = ("what's this gif", "whats this gif", "what is this gif",
-            "what's the gif", "describe this gif", "read this gif",
-            "what's this image", "whats this image", "what is this",
-            "what's this picture", "describe this", "explain this gif",
-            "what is happening in this", "what's happening in this",
-            "read this", "what does this say", "what's this")
-    return any(k in low for k in keys)
-
-
-def _looks_like_image_edit(text: str) -> bool:
-    low = text.lower()
-    triggers = (
-        "edit this", "edit the image", "edit this image",
-        "make him ", "make her ", "make them ", "make it ",
-        "turn him into", "turn her into", "turn them into",
-        "turn this into", "turn it into",
-        "change him to", "change her to", "change them to", "change it to",
-        "give him ", "give her ", "give them ", "give it ",
-        "put a ", "add a ", "remove the ",
-        "make this into", "make this ", "make it look",
-        "make him look", "make her look", "make them look",
-        "make it a ", "make him a ", "make her a ",
-        "restyle", "recolor", "photoshop",
-    )
-    return any(t in low for t in triggers)
-
-
-async def _reply_chain_media(message: discord.Message,
-                             max_count: int = 1) -> List[discord.Attachment]:
-    """Get attachments from the message being replied to."""
-    if not message.reference:
-        return []
-    resolved = message.reference.resolved
-    if resolved is None:
-        try:
-            resolved = await message.channel.fetch_message(
-                message.reference.message_id)
-        except Exception:
-            return []
-    if not isinstance(resolved, discord.Message):
-        return []
-    return list(resolved.attachments)[:max_count]
-
-
-async def _try_describe_media(message: discord.Message,
-                              content: str,
-                              uid: int) -> Optional[str]:
-    # 1. Attachments on this message
-    for att in message.attachments:
-        ct = (att.content_type or "").lower()
-        if "gif" in ct or "image" in ct or att.filename.lower().endswith(
-                (".gif", ".mp4", ".webm", ".png", ".jpg", ".jpeg", ".webp")):
-            return await bot.describe_media(att.url, uid=uid)
-
-    # 2. URLs in content
-    m = _GIF_URL_RE.search(content or "")
-    if m:
-        return await bot.describe_media(m.group(0), uid=uid)
-
-    # 3. Reply chain
-    for att in await _reply_chain_media(message):
-        ct = (att.content_type or "").lower()
-        if "gif" in ct or "image" in ct or att.filename.lower().endswith(
-                (".gif", ".mp4", ".webm", ".png", ".jpg", ".jpeg", ".webp")):
-            return await bot.describe_media(att.url, uid=uid)
-
-    return None
-
-
-async def _maybe_image_edit(message: discord.Message, content: str,
-                            uid: int) -> Optional[str]:
-    """Returns a hosted URL of the edited image if the user requested one."""
-    if not _looks_like_image_edit(content):
-        return None
-    # Only fire if there's an image to edit (attached or replied)
-    has_attach = any((a.content_type or "").startswith("image/")
-                     for a in message.attachments)
-    reply_atts = await _reply_chain_media(message)
-    has_reply_img = any((a.content_type or "").startswith("image/")
-                        for a in reply_atts)
-    if not (has_attach or has_reply_img):
-        return None
-    return await bot.try_image_edit(message, content, uid)
-
-
 @bot.event
 async def on_message(message: discord.Message):
     global _commands_served
@@ -5687,40 +6316,75 @@ async def on_message(message: discord.Message):
 
     clean = re.sub(r'<@!?{}>\s*'.format(bot.user.id), '', content).strip()
 
-    # ---------- IMAGE EDIT INTERCEPT ----------
-    # Fires when a message includes an image (attached or replied) and edit keywords.
+    if os.getenv("MAC_DEBUG_GIFS"):
+        logger.info(
+            f"[GIF-DEBUG] content={content[:120]!r} "
+            f"attachments={[(a.filename, a.content_type) for a in message.attachments]} "
+            f"embeds={[(e.type, getattr(e.video, 'url', None), "
+            f"getattr(e.image, 'url', None)) for e in (message.embeds or [])]}"
+        )
+
+    # ---------- 1. IMAGE EDIT INTERCEPT ----------
     try:
-        edited_url = await _maybe_image_edit(message, clean or content,
-                                              message.author.id)
+        if _looks_like_image_edit(clean or content):
+            has_attach = any((a.content_type or "").startswith(("image/", "video/"))
+                             for a in message.attachments)
+            reply_atts = await _reply_chain_media(message)
+            has_reply_media = any(
+                (a.content_type or "").startswith(("image/", "video/"))
+                for a in reply_atts)
+            has_embed_media = bool(_collect_media_urls_from_message(message))
+            reply_embed_media = False
+            if message.reference and isinstance(message.reference.resolved,
+                                                 discord.Message):
+                reply_embed_media = bool(
+                    _collect_media_urls_from_message(message.reference.resolved))
+
+            if has_attach or has_reply_media or has_embed_media or reply_embed_media:
+                edited_url = await bot.try_image_edit(
+                    message, clean or content, message.author.id)
+                if edited_url:
+                    _commands_served += 1
+                    emb = discord.Embed(title="🎨 Image edited", color=C_PRIMARY)
+                    emb.set_image(url=edited_url)
+                    emb.set_footer(text=f"By {message.author.display_name}")
+                    try:
+                        await message.channel.send(embed=emb)
+                    except discord.HTTPException:
+                        await safe_send(message.channel, content=edited_url)
+                    await bot.process_commands(message)
+                    return
     except Exception as e:
         logger.warning(f"Image edit check failed: {e}")
-        edited_url = None
-    if edited_url:
+
+    # ---------- 2. NATURAL LANGUAGE GENERATION ----------
+    gen_intent = _parse_gen_intent(clean)
+    if gen_intent:
+        kind, gprompt = gen_intent
         _commands_served += 1
-        emb = discord.Embed(title="🎨 Image edited", color=C_PRIMARY)
-        emb.set_image(url=edited_url)
-        emb.set_footer(text=f"By {message.author.display_name}")
-        try:
-            await message.channel.send(embed=emb)
-        except discord.HTTPException:
-            await safe_send(message.channel, content=edited_url)
+        if kind == "image":
+            await _do_generate_image(message.channel, message.author.id, gprompt)
+        elif kind == "tts":
+            await _do_generate_tts(message.channel, message.author.id, gprompt)
+        elif kind == "video":
+            await _do_generate_video(message.channel, message.author.id, gprompt)
         await bot.process_commands(message)
         return
 
-    # ---------- GIF / IMAGE DESCRIPTION INTERCEPT ----------
+    # ---------- 3. GIF / IMAGE DESCRIPTION ----------
     has_gif_attachment = any(
         "gif" in (a.content_type or "").lower()
         or a.filename.lower().endswith((".gif", ".mp4", ".webm"))
         for a in message.attachments)
     has_gif_url = bool(_GIF_URL_RE.search(content or ""))
+    has_embed_media = bool(_collect_media_urls_from_message(message))
     wants_read = _looks_like_gif_request(clean) if clean else False
+    content_no_urls = re.sub(r'https?://\S+', '', clean or '').strip()
 
     should_describe = False
     if wants_read:
         should_describe = True
-    elif not clean and (has_gif_attachment or has_gif_url):
-        should_describe = True
-    elif (has_gif_attachment or has_gif_url) and wants_read:
+    elif (has_gif_attachment or has_gif_url or has_embed_media) and not content_no_urls:
         should_describe = True
 
     if should_describe:
@@ -5734,7 +6398,7 @@ async def on_message(message: discord.Message):
             await bot.process_commands(message)
             return
 
-    # ---------- reply context ----------
+    # ---------- 4. Reply context + normal chat ----------
     reply_context = None
     reply_msg = None
     if message.reference:
@@ -5782,10 +6446,127 @@ async def on_message(message: discord.Message):
 
 
 # ======================================================================
+# HELPERS USED BY ON_MESSAGE (defined late — all globals resolved at call)
+# ======================================================================
+async def _try_describe_media(message: discord.Message,
+                              content: str,
+                              uid: int) -> Optional[str]:
+    # 1. Attachments on this message
+    for att in message.attachments:
+        ct = (att.content_type or "").lower()
+        if "gif" in ct or "image" in ct or att.filename.lower().endswith(
+                (".gif", ".mp4", ".webm", ".png", ".jpg", ".jpeg", ".webp")):
+            res = await bot.describe_media(att.url, uid=uid)
+            if res and not res.startswith(("❌", "⚠️")):
+                return res
+
+    # 2. URLs in content
+    m = _GIF_URL_RE.search(content or "")
+    if m:
+        res = await bot.describe_media(m.group(0), uid=uid)
+        if res and not res.startswith(("❌", "⚠️")):
+            return res
+
+    # 3. Discord embeds on THIS message (Tenor/Giphy/Klipy auto-unfurl)
+    for u in _collect_media_urls_from_message(message):
+        res = await bot.describe_media(u, uid=uid)
+        if res and not res.startswith(("❌", "⚠️")):
+            return res
+
+    # 4. Reply chain attachments
+    for att in await _reply_chain_media(message):
+        ct = (att.content_type or "").lower()
+        if "gif" in ct or "image" in ct or att.filename.lower().endswith(
+                (".gif", ".mp4", ".webm", ".png", ".jpg", ".jpeg", ".webp")):
+            res = await bot.describe_media(att.url, uid=uid)
+            if res and not res.startswith(("❌", "⚠️")):
+                return res
+
+    # 5. Reply chain embeds
+    if message.reference and isinstance(message.reference.resolved, discord.Message):
+        for u in _collect_media_urls_from_message(message.reference.resolved):
+            res = await bot.describe_media(u, uid=uid)
+            if res and not res.startswith(("❌", "⚠️")):
+                return res
+
+    return None
+
+
+async def _reply_chain_media(message: discord.Message,
+                             max_count: int = 1) -> List[discord.Attachment]:
+    if not message.reference:
+        return []
+    resolved = message.reference.resolved
+    if resolved is None:
+        try:
+            resolved = await message.channel.fetch_message(
+                message.reference.message_id)
+        except Exception:
+            return []
+    if not isinstance(resolved, discord.Message):
+        return []
+    return list(resolved.attachments)[:max_count]
+
+
+async def _do_generate_image(channel, uid: int, prompt: str):
+    status = await safe_send(channel, content="🎨 Checking prompt…")
+    try:
+        safe, reason = await bot.is_prompt_safe(prompt, uid=uid)
+        if not safe:
+            return await safe_edit(status, content=f"🚫 **Blocked.** {reason}")
+        await safe_edit(status, content="🎨 Generating image…")
+        chosen = bot.current_image_mode
+        if chosen in ("hf", "huggingface"):
+            img = await bot.generate_hf_image(prompt, uid=uid)
+            label = "🤗 Hugging Face"
+        elif chosen in ("pollinations", "poll", "fast"):
+            img = await bot.generate_pollinations_image(prompt)
+            label = "⚡ Pollinations"
+        else:
+            img = await bot.generate_gemini_image(prompt, uid=uid)
+            label = "🧠 Gemini"
+        url = await bot.upload_image_to_hosting(img, uid=uid)
+        emb = discord.Embed(title="🖼️ Generated",
+                            description=f"**Backend:** {label}", color=C_PRIMARY)
+        emb.set_image(url=url)
+        emb.add_field(name="Prompt", value=prompt[:1024], inline=False)
+        await safe_edit(status, content=None, embed=emb)
+    except Exception as e:
+        await safe_edit(status, content=f"❌ `{str(e)[:180]}`")
+
+
+async def _do_generate_tts(channel, uid: int, text: str):
+    try:
+        clean = strip_for_tts(text)
+        if not clean:
+            return await safe_send(channel, content="❌ Nothing to say.")
+        audio = await bot.generate_voice(clean, uid=uid, fmt="opus")
+        vkey = bot.default_voice(uid)
+        meta = bot.all_voices(uid).get(vkey) or {"emoji": "🎙️", "desc": "voice"}
+        try:
+            f = discord.File(io.BytesIO(audio), filename="voice-message.ogg")
+            await channel.send(file=f,
+                               flags=discord.MessageFlags(is_voice_message=True))
+        except Exception:
+            f2 = discord.File(io.BytesIO(audio), filename="voice.mp3")
+            await safe_send(channel,
+                            content=f"{meta.get('emoji','🎙️')} "
+                                    f"**{meta.get('desc','voice')}**",
+                            file=f2)
+    except Exception as e:
+        await safe_send(channel, content=f"❌ TTS error: {str(e)[:180]}")
+
+
+async def _do_generate_video(channel, uid: int, prompt: str):
+    status = await safe_send(channel, content=f"🎬 Starting video: **{prompt}**…")
+    bot.loop.create_task(bot.generate_video(prompt, uid, status))
+
+
+# ======================================================================
 # WEB SERVER
 # ======================================================================
 async def handle_root(request):
-    return web.Response(text="🔥 Mac v24.0 is running")
+    return web.Response(text="🔥 Mac v25.0 is running")
 
 
 async def handle_health(request):
