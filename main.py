@@ -6331,15 +6331,6 @@ async def on_message(message: discord.Message):
             has_reply_media = any(
                 (a.content_type or "").startswith(("image/", "video/"))
                 for a in reply_atts)
-    # ---------- 1. IMAGE EDIT INTERCEPT ----------
-    try:
-        if _looks_like_image_edit(clean or content):
-            has_attach = any((a.content_type or "").startswith(("image/", "video/"))
-                             for a in message.attachments)
-            reply_atts = await _reply_chain_media(message)
-            has_reply_media = any(
-                (a.content_type or "").startswith(("image/", "video/"))
-                for a in reply_atts)
             has_embed_media = bool(_collect_media_urls_from_message(message))
             reply_embed_media = False
             if message.reference and isinstance(message.reference.resolved,
