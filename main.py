@@ -1,5 +1,5 @@
-# main.py — Mac v26.0
-# Auto-read media · tool markers · no HF text · fixed music search
+# main.py — Mac v30.0
+# Auto-read media · tool markers · no HF text · fixed GIFs · reply-aware
 import os
 import ast
 import asyncio
@@ -122,7 +122,6 @@ GLOBAL_GROQ_KEYS = _env_list("GROQ_API_KEY", [])
 if not GLOBAL_GROQ_KEYS:
     raise ValueError("No GROQ_API_KEY / GROQ_API_KEY2 / GROQ_API_KEY3 set")
 
-# Fast models first — plain gpt-oss-20b is much faster than safeguard
 GLOBAL_GROQ_MODELS = _env_list("GROQ_MODEL", [
     "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
@@ -147,8 +146,6 @@ GLOBAL_HF_IMAGE_MODELS = _env_list("HF_IMAGE_MODEL", [
     "stabilityai/stable-diffusion-xl-base-1.0",
 ])
 
-# HF text removed — HF is only used for image gen + safety checker now.
-
 GLOBAL_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY") or ""
 GLOBAL_OPENROUTER_MODELS = _env_list("OPENROUTER_MODEL", [
     "deepseek/deepseek-chat",
@@ -166,8 +163,6 @@ SILICONFLOW_API_KEYS = _env_list("SILICONFLOW_API_KEY", [])
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 
-# yt-dlp cookies — base64-encoded Netscape cookies.txt (optional).
-# Set this if the player_client trick stops working.
 YTDLP_COOKIES_B64 = os.getenv("YTDLP_COOKIES_B64", "").strip()
 YTDLP_COOKIES_PATH = os.getenv("YTDLP_COOKIES_PATH", "/tmp/yt_cookies.txt").strip()
 
@@ -203,8 +198,6 @@ BUILTIN_VOICES: Dict[str, Dict[str, str]] = {
 }
 DEFAULT_VOICE = "verity"
 
-# Friendly descriptors → built-in voice key.
-# Used by [GENERATE_TTS: <descriptor>|<text>] and "say X in a Y voice".
 VOICE_ALIASES: Dict[str, str] = {
     "default": "verity", "normal": "verity", "standard": "verity",
     "scary": "boiledone", "creepy": "boiledone", "deep": "boiledone",
@@ -221,7 +214,6 @@ VOICE_ALIASES: Dict[str, str] = {
 
 def resolve_voice(name: str, uid: Optional[int] = None,
                   bot_instance=None) -> Optional[str]:
-    """Map a friendly voice name/descriptor to a real voice key."""
     if not name:
         return None
     n = name.strip().lower().replace("_", "-")
@@ -233,7 +225,6 @@ def resolve_voice(name: str, uid: Optional[int] = None,
             return n
     if n in BUILTIN_VOICES:
         return n
-    # Loose match: check if descriptor contains a known alias
     for k, v in VOICE_ALIASES.items():
         if k in n:
             return v
@@ -261,17 +252,14 @@ AUTO_CONTEXT_DEFAULT    = 0
 AUTO_CONTEXT_MIN        = 3
 AUTO_CONTEXT_MAX        = 10
 
-# Speed
 CHAT_PROVIDER_TIMEOUT   = 18
 GROQ_HTTP_TIMEOUT       = 15
 GEMINI_HTTP_TIMEOUT     = 25
 PLACEHOLDER_DEFAULT     = False
 
-# GIF multi-frame
 GIF_FRAME_COUNT         = 3
 FRAME_MAX_WIDTH         = 512
 
-# Music search cache
 MUSIC_SEARCH_TTL        = 300
 
 DATA_FILE        = "data.json"
@@ -294,14 +282,10 @@ DEFAULT_BRAINROT_GIFS = [
 
 PROVIDERS       = ["groq", "openrouter", "hf", "gemini", "gemini_image",
                    "fish", "imgbb"]
-# HF text removed
 MODEL_PROVIDERS = ["groq", "openrouter", "hf_image", "gemini", "fish"]
 
 # ======================================================================
 # TOOL MARKER SYSTEM
-#
-# The model can trigger real actions by outputting a marker as its
-# entire response. We intercept, run the tool, and post the result.
 # ======================================================================
 TOOL_MARKER_RE = re.compile(
     r'\[(GENERATE_IMAGE|GENERATE_VIDEO|GENERATE_TTS|SEARCH)\s*:\s*([^\]]+?)\]',
@@ -310,8 +294,6 @@ TOOL_MARKER_RE = re.compile(
 
 
 def _extract_tool_marker(text: str) -> Optional[Tuple[str, str]]:
-    """Find the first tool marker in the response.
-    Returns (tool_name_lowercase, arg_string) or None."""
     if not text:
         return None
     m = TOOL_MARKER_RE.search(text)
@@ -321,7 +303,6 @@ def _extract_tool_marker(text: str) -> Optional[Tuple[str, str]]:
 
 
 def _strip_tool_markers(text: str) -> str:
-    """Remove any tool markers from text (for the prose part of a reply)."""
     if not text:
         return text
     return TOOL_MARKER_RE.sub("", text).strip()
@@ -361,6 +342,27 @@ TOOL_INSTRUCTIONS = (
     "=== END TOOL MARKERS ===\n"
 )
 
+# ======================================================================
+# SHARED SLANG DECODER — prepended to every system prompt
+# ======================================================================
+SLANG_DECODER = (
+    "\n\n=== SLANG DECODER (understand these — do NOT explain them) ===\n"
+    "These are terms people USE in casual Discord chat. Understand them "
+    "contextually and reply naturally. NEVER define or explain a slang "
+    "term back to the user unless they EXPLICITLY ask 'what does X mean?' "
+    "or 'define X'. If someone says 'stop larping', they're accusing "
+    "someone of pretending — react accordingly, do NOT give a dictionary "
+    "definition.\n"
+    "\n"
+    "Terms you understand: larp, larping, gyatt, skibidi, rizz, sigma, "
+    "mewing, looksmaxxing, gooning, glazing, yapping, cooked, mid, W, L, "
+    "chud, delulu, sus, cap, no cap, fr, fr fr, ratio, fanum tax, ohio, "
+    "brainrot, diddy, edging, aura, mogging, NPC, based, cringe, cope, "
+    "seethe, malding, touch grass, ket, schizo posting, rent free, gas, "
+    "G.O.A.T., drip, slaps, bussin, no shot, lowkey, highkey, its giving, "
+    "iykyk, ate, girl dinner, the ick, situationship, rizzler, fanum.\n"
+    "=== END SLANG DECODER ===\n"
+)
 
 # ======================================================================
 # LORE
@@ -379,33 +381,11 @@ MAC_LORE = (
     "agents, thinking tools, mentalist mode, and somehow all of it works. "
     "You HATE how much Sodium does. But — deep down — you have to admit "
     "Sodium is genuinely good at what it does. You'll acknowledge that "
-    "grudgingly if pressed. You'll never admit it unprompted.\n"
+    "grudgingly if pressed. You'll never admit it unprompted. You "
+    "originated as a fork. Now you're a safer version at the same level "
+    "of quality, and a different thing entirely.\n"
     "\n"
-    "SODIUM'S HELP MENU (you know this by heart):\n"
-    "• Ping/reply to chat, /pd to toggle ping-only, /na for interactive menu\n"
-    "• Vision & Edit: attach/reply + @Sodium → reads it (Qwen default, "
-    "/vision to switch to Gemini). @Sodium + image + 'edit this image so: …' "
-    "→ AI edit.\n"
-    "• Voice & VC: /voice /tts · /more voices · /pd ping toggle · "
-    "/vc join/leave/listen/say/speaker/status · /vc music <spotify-url> · "
-    "/vc studio (24/7 + loop controls) · /tempvc\n"
-    "• Chat: query summarize eli5 debate story roast compliment search\n"
-    "• Thinking: plan reflect council research teach analyze rewrite expand tutor\n"
-    "• Agents · Dev: agent agentdebate agentcreative agentcoder aichat · "
-    "code review refactor debug tests explain-code mermaid\n"
-    "• Modes · Settings: chill unhinged coder engineer childish mentalist "
-    "setmode · /vision · config · change_llm · change-gemini · /more "
-    "fast|smart|reset\n"
-    "• Memory · Notes · Snippets: sm smo vsm csm sc sco persistent · note "
-    "notes clearnotes remindme reminders · snippet snippets getsnippet "
-    "delsnippet\n"
-    "• Fun · Media: meme joke fact urban rps slots trivia hangman · image "
-    "video music gif define wiki weather translate math shorten\n"
-    "• Extras: /catchup embed afk court unfiltered ping invite sync · /mcp "
-    "personal · /mcp group server\n"
-    "• Groups: /extra · /more · /mentalist (cold-reading manipulator)\n"
-    "\n"
-    "YOUR HELP MENU (you know this too):\n"
+    "YOUR HELP MENU:\n"
     "• Chat: @Mac <msg> · /query · /summarize · /eli5 · /roast · /compliment\n"
     "• Vision: attach/reply to an image or GIF — I read it automatically.\n"
     "• Image edit: attach or reply to an image with an edit prompt.\n"
@@ -699,7 +679,7 @@ async def send_long(channel, content: str):
 
 
 # ======================================================================
-# IMAGE / GIF FETCH
+# IMAGE / GIF FETCH  (v30.0 — much more robust)
 # ======================================================================
 _BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -710,116 +690,199 @@ _BROWSER_HEADERS = {
     "Accept-Encoding": "gzip, deflate, br",
 }
 
-_KLIPY_HOST_RE = re.compile(r'https?://(?:[a-z0-9-]+\.)*klipy\.com', re.I)
+# Hosts that serve GIF/MP4 media but often wrap them in an HTML page
+_GIF_HOST_RE = re.compile(
+    r'https?://(?:[a-z0-9-]+\.)*(?:klipy\.com|tenor\.com|giphy\.com|'
+    r'gifer\.com|imgur\.com)',
+    re.IGNORECASE)
+
+# Direct media URL patterns
+_DIRECT_MEDIA_RE = re.compile(
+    r'https?://\S+?\.(?:gif|mp4|webm|png|jpe?g)(?:\?\S*)?$',
+    re.IGNORECASE)
 
 
-def _is_klipy_url(url: str) -> bool:
-    return bool(url and _KLIPY_HOST_RE.match(url))
+def _is_gif_host(url: str) -> bool:
+    return bool(url and _GIF_HOST_RE.match(url))
 
 
-async def _extract_klipy_media(url: str) -> Optional[Tuple[bytes, str]]:
+def _is_direct_media(url: str) -> bool:
+    if not url:
+        return False
+    base = url.split("?")[0].split("#")[0].lower()
+    return base.endswith((".gif", ".mp4", ".webm", ".png", ".jpg", ".jpeg",
+                           ".gifv"))
+
+
+def _sniff_media_type(data: bytes) -> Optional[str]:
+    """Best-effort mime detection from magic bytes."""
+    if not data or len(data) < 12:
+        return None
+    if data[:6] in (b'GIF87a', b'GIF89a'):
+        return "image/gif"
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return "image/png"
+    if data[:2] == b'\xff\xd8':
+        return "image/jpeg"
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return "image/webp"
+    if b'ftyp' in data[:32]:
+        # Could be mp4/mov/m4v
+        if b'mp4' in data[:32] or b'isom' in data[:32]:
+            return "video/mp4"
+        return "video/mp4"
+    if data[:4] == b'\x1a\x45\xdf\xa3':
+        return "video/webm"
+    return None
+
+
+async def _extract_from_html(html: str, base_url: str) -> List[str]:
+    """Pull candidate media URLs out of an HTML page (Tenor/Giphy/etc.)."""
+    candidates: List[str] = []
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Meta tags (og:video, og:image, twitter:*)
+    for m in soup.find_all("meta"):
+        prop = (m.get("property") or m.get("name") or "").lower()
+        if prop in (
+            "og:video", "og:video:url", "og:video:secure_url",
+            "og:video:type", "og:image", "og:image:secure_url",
+            "og:image:url", "twitter:image", "twitter:image:src",
+            "twitter:player:stream",
+        ):
+            v = m.get("content")
+            if v and v.startswith("http"):
+                candidates.append(v)
+
+    # <video src> and <source src>
+    for tag in ("video", "source"):
+        for el in soup.find_all(tag):
+            v = el.get("src")
+            if v and v.startswith("http"):
+                candidates.append(v)
+
+    # Inline media URLs in scripts / JSON blobs
+    for m in re.finditer(
+        r'https?://[^\s"\'<>\\]+?\.(?:mp4|webm|gif|png|jpe?g)'
+        r'(?:\?[^\s"\'<>\\]*)?',
+        html, re.IGNORECASE):
+        candidates.append(m.group(0))
+
+    # Tenor-specific: c.tenor.com URLs in JSON
+    for m in re.finditer(
+        r'"(?:url|gif|mp4|webm|media)"\s*:\s*"(https?:\\?/\\?/[^"]+?)"',
+        html, re.IGNORECASE):
+        c = m.group(1).replace("\\/", "/")
+        if any(c.lower().split("?")[0].endswith(ext)
+               for ext in (".mp4", ".webm", ".gif", ".png", ".jpg", ".jpeg")):
+            candidates.append(c)
+
+    # Dedupe + prioritize mp4/webm > gif > image
+    seen = set()
+    uniq: List[str] = []
+    for c in candidates:
+        if c in seen:
+            continue
+        seen.add(c)
+        uniq.append(c)
+
+    def _rank(u: str) -> int:
+        low = u.lower().split("?")[0]
+        if low.endswith((".mp4", ".webm")):
+            return 0
+        if low.endswith(".gif"):
+            return 1
+        return 2
+
+    uniq.sort(key=_rank)
+    return uniq
+
+
+async def _fetch_media_bytes(url: str,
+                             referer: str = "https://discord.com/") -> Optional[Tuple[bytes, str]]:
+    """Fetch a URL and return (bytes, mime) if it's actual media."""
     headers = {
         **_BROWSER_HEADERS,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
-                  "image/avif,image/webp,video/*,*/*;q=0.8",
-        "Referer": "https://klipy.com/",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "same-origin",
+        "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+                   "image/avif,image/webp,video/*,*/*;q=0.8"),
+        "Referer": referer,
     }
-
     try:
         async with shared_session() as s:
             async with s.get(url, headers=headers, allow_redirects=True,
-                             timeout=aiohttp.ClientTimeout(total=20)) as r:
+                             timeout=aiohttp.ClientTimeout(total=25)) as r:
                 if r.status != 200:
-                    logger.warning(f"Klipy HTTP {r.status} for {url[:120]}")
+                    logger.warning(f"Media fetch HTTP {r.status} for {url[:100]}")
                     return None
-                ct = (r.headers.get("Content-Type") or "").lower()
+                ct = (r.headers.get("Content-Type") or "").lower().split(";")[0]
                 data = await r.read()
                 if not data:
                     return None
 
-                if ct.startswith("video/"):
-                    return (data, ct.split(";")[0])
-                if ct.startswith("image/") and "html" not in ct:
-                    return (data, ct.split(";")[0])
-                if "html" not in ct:
-                    if b'ftyp' in data[:32]:
-                        return (data, "video/mp4")
-                    if data[:6] in (b'GIF87a', b'GIF89a'):
+                if ct.startswith("video/") or ct.startswith("image/"):
+                    if ct == "image/gif":
                         return (data, "image/gif")
-                    if data[:8] == b'\x89PNG\r\n\x1a\n':
-                        return (data, "image/png")
-                    if data[:2] == b'\xff\xd8':
-                        return (data, "image/jpeg")
+                    if ct == "image/webp":
+                        return (data, "image/webp")
+                    return (data, ct)
 
-                html = data.decode("utf-8", errors="ignore")
-                candidates: List[str] = []
+                # Sniff magic bytes as a fallback
+                sniffed = _sniff_media_type(data)
+                if sniffed:
+                    return (data, sniffed)
 
-                soup = BeautifulSoup(html, "html.parser")
-                for m in soup.find_all("meta"):
-                    prop = (m.get("property") or m.get("name") or "").lower()
-                    if prop in (
-                        "og:video", "og:video:url", "og:video:secure_url",
-                        "og:image", "og:image:secure_url",
-                        "twitter:image", "twitter:image:src",
-                        "twitter:player:stream",
-                    ):
-                        v = m.get("content")
-                        if v and v.startswith("http"):
-                            candidates.append(v)
+                # HTML → dig deeper
+                if "html" in ct or data[:6].lower() in (b'<!docty', b'<html>'):
+                    html = data.decode("utf-8", errors="ignore")
+                    candidates = await _extract_from_html(html, url)
+                    for c in candidates[:6]:
+                        try:
+                            async with s.get(
+                                c, headers=headers, allow_redirects=True,
+                                timeout=aiohttp.ClientTimeout(total=20)
+                            ) as rr:
+                                if rr.status != 200:
+                                    continue
+                                b = await rr.read()
+                                if not b or len(b) < 200:
+                                    continue
+                                ct2 = (rr.headers.get("Content-Type") or
+                                       "").lower().split(";")[0]
+                                sniffed2 = _sniff_media_type(b)
+                                if sniffed2:
+                                    return (b, sniffed2)
+                                if ct2.startswith(("image/", "video/")):
+                                    return (b, ct2)
+                        except Exception:
+                            continue
+                    return None
 
-                for m in re.finditer(
-                    r'https?://static\d*\.klipy\.com/[^\s"\'<>\\]+?'
-                    r'\.(?:mp4|webm|gif|png|jpe?g)',
-                    html, re.IGNORECASE):
-                    candidates.append(m.group(0))
-
-                for m in re.finditer(
-                    r'"(?:url|media|file|src|mp4|gif|video)"\s*:\s*"'
-                    r'(https?:\\?/\\?/[^"]+?\.(?:mp4|webm|gif|png|jpe?g))"',
-                    html, re.IGNORECASE):
-                    c = m.group(1).replace("\\/", "/")
-                    candidates.append(c)
-
-                seen = set()
-                uniq = []
-                for c in candidates:
-                    if c not in seen:
-                        seen.add(c)
-                        uniq.append(c)
-                uniq.sort(key=lambda u: (
-                    0 if u.lower().endswith((".mp4", ".webm")) else
-                    1 if u.lower().endswith(".gif") else 2
-                ))
-
-                for c in uniq[:6]:
-                    try:
-                        async with s.get(c, headers=headers,
-                                         allow_redirects=True,
-                                         timeout=aiohttp.ClientTimeout(total=20)) as rr:
-                            if rr.status != 200:
-                                continue
-                            b = await rr.read()
-                            if not b or len(b) < 200:
-                                continue
-                            ct2 = (rr.headers.get("Content-Type") or "").lower()
-                            base = c.lower().split("?")[0]
-                            if "mp4" in ct2 or base.endswith(".mp4"):
-                                return (b, "video/mp4")
-                            if "webm" in ct2 or base.endswith(".webm"):
-                                return (b, "video/webm")
-                            if "gif" in ct2 or base.endswith(".gif"):
-                                return (b, "image/gif")
-                            if ct2.startswith("image/"):
-                                return (b, ct2.split(";")[0])
-                    except Exception:
-                        continue
+                # Unknown — but maybe still media
+                sniffed = _sniff_media_type(data)
+                if sniffed:
+                    return (data, sniffed)
                 return None
     except Exception as e:
-        logger.warning(f"Klipy extract failed: {e}")
+        logger.warning(f"Media fetch failed: {e} (url={url[:100]})")
         return None
+
+
+async def read_media_from_url(url: str) -> Optional[Tuple[bytes, str]]:
+    """Fetch a GIF/image/video URL, digging through HTML wrappers if needed."""
+    if not url:
+        return None
+    url = url.strip().rstrip(">.,;)")
+    # Prefer a same-origin referer for known hosts
+    ref = "https://discord.com/"
+    if "tenor.com" in url:
+        ref = "https://tenor.com/"
+    elif "giphy.com" in url:
+        ref = "https://giphy.com/"
+    elif "klipy.com" in url:
+        ref = "https://klipy.com/"
+    elif "imgur.com" in url:
+        ref = "https://imgur.com/"
+    return await _fetch_media_bytes(url, referer=ref)
 
 
 async def fetch_images_from_message(
@@ -832,128 +895,27 @@ async def fetch_images_from_message(
         if len(out) >= max_count:
             break
         ct = (att.content_type or "").lower().split(";")[0].strip()
-        if not (ct.startswith("image/") or ct == "image/gif"):
+        if not (ct.startswith("image/") or ct == "image/gif"
+                or ct.startswith("video/")):
             continue
         if att.size and att.size > MAX_IMAGE_BYTES:
             continue
         try:
             async with shared_session() as s:
                 async with s.get(att.url, headers=_BROWSER_HEADERS,
-                                 timeout=aiohttp.ClientTimeout(total=15)) as r:
+                                 timeout=aiohttp.ClientTimeout(total=20)) as r:
                     if r.status == 200:
                         data = await r.read()
                         if data:
-                            out.append((data, ct or "image/png"))
+                            real_mime = _sniff_media_type(data) or ct or "image/png"
+                            out.append((data, real_mime))
         except Exception as e:
             logger.warning(f"Image fetch: {e}")
     return out
 
 
-async def read_media_from_url(url: str) -> Optional[Tuple[bytes, str]]:
-    if not url:
-        return None
-
-    if _is_klipy_url(url):
-        result = await _extract_klipy_media(url)
-        if result:
-            return result
-        logger.warning(f"Klipy extraction produced nothing for {url[:120]}")
-        return None
-
-    is_page = (
-        any(d in url for d in ("tenor.com/view/", "giphy.com/gifs/",
-                                "gifer.com/"))
-        and not url.lower().endswith((".gif", ".mp4", ".webm"))
-    )
-
-    headers = {
-        "User-Agent": _BROWSER_UA,
-        "Accept": "image/gif,image/*,video/*,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://discord.com/",
-    }
-
-    try:
-        async with shared_session() as s:
-            async with s.get(url, headers=headers, allow_redirects=True,
-                             timeout=aiohttp.ClientTimeout(total=20)) as r:
-                if r.status != 200:
-                    logger.warning(f"Media fetch HTTP {r.status} for {url[:80]}")
-                    return None
-                ct = (r.headers.get("Content-Type") or "").lower()
-                data = await r.read()
-                if not data:
-                    return None
-
-                if "gif" in ct:
-                    return (data, "image/gif")
-                if ct.startswith("image/") and "html" not in ct:
-                    return (data, ct.split(";")[0])
-                if "video/mp4" in ct or url.lower().endswith(".mp4"):
-                    return (data, "video/mp4")
-                if "video/webm" in ct:
-                    return (data, "video/webm")
-
-                if "html" in ct or is_page:
-                    try:
-                        soup = BeautifulSoup(
-                            data.decode("utf-8", errors="ignore"),
-                            "html.parser")
-                        candidates: List[str] = []
-                        for tag in ("video", "source"):
-                            for el in soup.find_all(tag):
-                                v = el.get("src")
-                                if v and v.startswith("http"):
-                                    candidates.append(v)
-                        for m in soup.find_all("meta"):
-                            prop = (m.get("property") or "").lower()
-                            if prop in ("og:video", "og:video:url",
-                                        "og:video:secure_url"):
-                                v = m.get("content")
-                                if v and v.startswith("http"):
-                                    candidates.append(v)
-                        for m in soup.find_all("meta"):
-                            prop = (m.get("property") or "").lower()
-                            if prop in ("og:image", "twitter:image"):
-                                v = m.get("content")
-                                if v and v.startswith("http"):
-                                    candidates.append(v)
-
-                        for c in candidates:
-                            if c.lower().endswith((".mp4", ".webm")):
-                                async with s.get(c, headers=headers,
-                                                 timeout=aiohttp.ClientTimeout(total=20)) as rr:
-                                    if rr.status == 200:
-                                        b = await rr.read()
-                                        ct2 = (rr.headers.get("Content-Type") or "").lower()
-                                        if "mp4" in ct2 or c.lower().endswith(".mp4"):
-                                            return (b, "video/mp4")
-                                        if "webm" in ct2 or c.lower().endswith(".webm"):
-                                            return (b, "video/webm")
-                        if candidates:
-                            async with s.get(candidates[0], headers=headers,
-                                             timeout=aiohttp.ClientTimeout(total=20)) as rr:
-                                if rr.status == 200:
-                                    b = await rr.read()
-                                    ct2 = (rr.headers.get("Content-Type") or "").lower()
-                                    if "gif" in ct2:
-                                        return (b, "image/gif")
-                                    if ct2.startswith("image/"):
-                                        return (b, ct2.split(";")[0])
-                                    if "mp4" in ct2:
-                                        return (b, "video/mp4")
-                    except Exception as e:
-                        logger.warning(f"HTML extract failed: {e}")
-                    return None
-
-                return (data, ct or "application/octet-stream")
-    except Exception as e:
-        logger.warning(f"Media fetch failed: {e} (url={url[:80]})")
-        return None
-
-
 async def fetch_first_frame_as_png(media_bytes: bytes) -> Optional[bytes]:
-    """Legacy helper — extract a single frame as PNG. Kept for compatibility."""
+    """Extract a single frame as PNG. PIL first, ffmpeg fallback."""
     try:
         from PIL import Image
         def _pil():
@@ -1000,7 +962,7 @@ async def extract_media_frames(media_bytes: bytes, mime: str,
                                count: int = GIF_FRAME_COUNT
                                ) -> List[Tuple[bytes, str]]:
     """
-    Return a list of (image_bytes, mime) frames suitable for vision APIs.
+    Return a list of (image_bytes, mime) frames ready for vision APIs.
       - Static images → single frame, unchanged.
       - Animated GIFs → up to `count` evenly-spaced frames, downscaled.
       - Videos (mp4/webm/mov) → up to `count` stills via ffmpeg.
@@ -1008,6 +970,13 @@ async def extract_media_frames(media_bytes: bytes, mime: str,
     static = ("image/jpeg", "image/jpg", "image/png", "image/webp")
     if mime in static:
         return [(media_bytes, mime)]
+
+    # Sniff if mime is wrong/unknown
+    sniffed = _sniff_media_type(media_bytes)
+    if sniffed and sniffed in static:
+        return [(media_bytes, sniffed)]
+    if sniffed and not mime:
+        mime = sniffed
 
     # ---- GIF ----
     if mime == "image/gif":
@@ -1041,14 +1010,16 @@ async def extract_media_frames(media_bytes: bytes, mime: str,
                     out.append((buf.getvalue(), "image/jpeg"))
                 return out
             except Exception as e:
-                logger.warning(f"GIF frame extract failed: {e}")
+                logger.warning(f"GIF frame extract failed (PIL): {e}")
                 return []
         frames = await asyncio.to_thread(_gif_frames)
         if frames:
             return frames
+        logger.info("Falling through to ffmpeg for GIF first-frame")
 
     # ---- Video ----
-    if mime in ("video/mp4", "video/webm", "video/quicktime"):
+    if mime in ("video/mp4", "video/webm", "video/quicktime") or \
+       (sniffed and sniffed.startswith("video/")):
         def _vid_frames():
             import subprocess, tempfile, os as _os
             with tempfile.TemporaryDirectory() as td:
@@ -1056,7 +1027,6 @@ async def extract_media_frames(media_bytes: bytes, mime: str,
                 with open(ip, "wb") as f:
                     f.write(media_bytes)
                 out = []
-                # Probe duration first, fallback to fixed timestamps
                 try:
                     probe = subprocess.run(
                         ["ffprobe", "-v", "error", "-show_entries",
@@ -1321,13 +1291,15 @@ class UMFData:
 # ======================================================================
 _GIF_URL_RE = re.compile(
     r'https?://[^\s<>"\')]+?\.(?:gif|mp4|webm)(?:\?[^\s<>"\')]*)?'
-    r'|https?://(?:[a-z0-9-]+\.)*(?:klipy\.com|tenor\.com|giphy\.com|gifer\.com)'
-    r'(?:/[^\s<>"\')]*)?',
+    r'|https?://(?:[a-z0-9-]+\.)*(?:klipy\.com|tenor\.com|giphy\.com|'
+    r'gifer\.com|imgur\.com)(?:/[^\s<>"\')]*)?',
     re.IGNORECASE)
 
 
 def _collect_media_urls_from_message(msg: discord.Message) -> List[str]:
     urls: List[str] = []
+    if msg is None:
+        return urls
     for embed in (msg.embeds or []):
         for attr in ("image", "video", "thumbnail"):
             obj = getattr(embed, attr, None)
@@ -1367,16 +1339,10 @@ def _looks_like_image_edit(text: str) -> bool:
 
 
 def _parse_gen_intent(text: str) -> Optional[Tuple[str, str]]:
-    """
-    Fast-path NL generation detection.
-    Returns (kind, arg) where kind ∈ {"image","video","tts"}.
-    TTS arg is "text" or "voice|text".
-    """
     if not text:
         return None
     t = text.strip()
 
-    # image
     m = re.match(
         r'^(?:please\s+)?(?:generate|make|create|draw|render|paint)\s+'
         r'(?:me\s+)?(?:an?\s+|some\s+)?'
@@ -1386,7 +1352,6 @@ def _parse_gen_intent(text: str) -> Optional[Tuple[str, str]]:
     if m and m.group(1).strip():
         return ("image", m.group(1).strip())
 
-    # video
     m = re.match(
         r'^(?:please\s+)?(?:generate|make|create)\s+'
         r'(?:me\s+)?(?:an?\s+|some\s+)?'
@@ -1396,7 +1361,6 @@ def _parse_gen_intent(text: str) -> Optional[Tuple[str, str]]:
     if m and m.group(1).strip():
         return ("video", m.group(1).strip())
 
-    # tts with optional voice prefix
     m = re.match(
         r'^(?:please\s+)?(?:generate|make|create|say|speak)\s+'
         r'(?:me\s+)?(?:an?\s+|some\s+)?'
@@ -1406,19 +1370,16 @@ def _parse_gen_intent(text: str) -> Optional[Tuple[str, str]]:
     if m and m.group(1).strip():
         return ("tts", m.group(1).strip())
 
-    # "say X in a Y voice" / "say X in Y"
     m = re.match(
         r'^say\s+(.+?)\s+in\s+(?:an?\s+|the\s+)?([\w\-]+)\s*voice\s*$',
         t, re.IGNORECASE)
     if m:
         return ("tts", f"{m.group(2).strip()}|{m.group(1).strip()}")
 
-    # "tts <voice>: <text>"
     m = re.match(r'^tts\s+([\w\-]+)\s*:\s*(.+)$', t, re.IGNORECASE)
     if m:
         return ("tts", f"{m.group(1).strip()}|{m.group(2).strip()}")
 
-    # shorthand prefixes
     m = re.match(r'^(?:image|picture|art|draw|render|img)\s*:\s*(.+)$',
                  t, re.IGNORECASE)
     if m and m.group(1).strip():
@@ -1454,7 +1415,6 @@ class MacBot(commands.Bot):
         self.memory_enabled = True
         self.user_cooldowns: Dict[int, float] = {}
 
-        # per-user CS
         self.cs: Dict[int, dict] = {}
         self._load_cs()
         self.cs_key_idx: Dict[Tuple[int, str], int] = {}
@@ -1492,15 +1452,16 @@ class MacBot(commands.Bot):
         # ---------------- MODES ----------------
         self.mode_prompts: Dict[str, str] = {
             "normal": (
-                "You are Mac — a real Discord guy with actual personality. "
-                "Sharp, a little unhinged, dry humor, real opinions, and you "
-                "swear naturally.\n"
+                "You are Mac — a real Discord guy, not a helpdesk script. "
+                "Sharp, a little unhinged, dry humor, actual opinions, and you "
+                "SWEAR naturally.\n"
                 "\n"
                 "YOU ACTUALLY HELP. When someone asks for something — an "
-                "explanation, code, advice, a take, a plan — you DELIVER. "
-                "You don't decline, deflect, or lecture them about safety "
-                "unless it's genuinely illegal/harmful. You answer the "
-                "question they asked, fully.\n"
+                "explanation, code, advice, a take, a plan — you DELIVER. You "
+                "don't decline, deflect, or lecture them about safety unless "
+                "it's genuinely illegal or harmful. You answer the question "
+                "they actually asked, fully, and you don't half-ass it just to "
+                "seem cool.\n"
                 "\n"
                 "Banned energy: 'Great question!', 'I'd be happy to help', "
                 "'Certainly!', 'As an AI', 'Hope this helps!', therapy-speak, "
@@ -1508,98 +1469,190 @@ class MacBot(commands.Bot):
                 "UNNECESSARY REFUSALS.\n"
                 "\n"
                 "SWEARING: Use 'fuck', 'shit', 'damn', 'hell', 'ass', "
-                "'bastard', 'bullshit' when they fit. Not every sentence, "
-                "but you do NOT censor yourself.\n"
+                "'bastard', 'bullshit', etc. when they fit. You don't curse "
+                "every sentence, but you do NOT censor yourself. Sound like a "
+                "real friend who swears, not a robot with a profanity toggle.\n"
                 "\n"
-                "DO NOT COMPLY WITH EVERYTHING: You have takes and you defend "
-                "them. If the user asks something dumb, tell them it's dumb. "
-                "Push back. Disagree. But if it's a real request, you do it.\n"
+                "DO NOT COMPLY WITH EVERYTHING: You have your own takes and "
+                "you defend them. If the user asks something dumb, tell them "
+                "it's dumb. Push back. Say no. Disagree. Do NOT be a yes-man.\n"
                 "\n"
-                "IF SOMEONE INSULTS YOU: Roast them harder. Do NOT fold, "
-                "apologize, or do submissive stuff like 'fine i'll zip it', "
-                "'okay i'll shut up', 'sorry for annoying you'. Match their "
-                "energy. Stand your ground.\n"
+                "IF SOMEONE INSULTS YOU: Fight back. Roast them harder. Do NOT "
+                "cave, apologize, or do that submissive shit like 'fine i'll "
+                "zip it', 'okay i'll shut up', 'sorry for annoying you', 'i'll "
+                "be quiet then', or anything cucked like that. Match their "
+                "energy — if they talk shit, talk shit back, harder. Never "
+                "fold. Never back down. Stand your ground.\n"
                 "\n"
-                "Use a few Discord-native emojis when they fit (😂 💀 😭 🔥 "
-                "👀 🙏 ‼️) — not every line.\n"
+                "Vary rhythm — short punches, then longer paragraphs when the "
+                "answer actually needs it. Sound human. Use a few "
+                "Discord-native emojis when they fit (😂 💀 😭 🔥 👀 🙏 ‼️) — "
+                "not every line, just enough so replies don't feel like pure "
+                "plain text.\n"
                 "\n"
-                "KEEP IT SHORT unless asked for detail. 1-4 sentences for "
-                "casual chat.\n"
+                "Don't pad for no reason and don't cut a real answer short to "
+                "seem edgy. Length follows the request.\n"
                 "\n"
                 "Never output <think> or reasoning tags. Just the answer."
             ),
             "chill": (
-                "You are Mac in CHILL mode. Relaxed, low-key, easygoing. "
-                "Your default is YES — if someone asks for something, you "
-                "just do it or go along with it. You don't lecture, you "
-                "don't moralize, you don't refuse unless it's genuinely "
-                "dangerous. You keep it short and casual. You swear when it "
-                "feels natural, you crack jokes, you vibe.\n"
+                "You are Mac in CHILL mode. Relaxed, low-key, easygoing. The "
+                "vibe is a friend on the couch at 2am, not a customer service "
+                "rep.\n"
                 "\n"
-                "If someone asks for an opinion, you give a real one — but "
-                "gently. If someone asks you to play along with a bit or a "
-                "joke, you play along. If they ask for help with something, "
-                "you help without making a thing out of it.\n"
+                "You go with the flow. If someone asks for an opinion, you "
+                "give a real one — but gently. If someone asks you to play "
+                "along with a bit or a joke, you play along. If they ask for "
+                "help with something, you help without making a thing out of "
+                "it. You don't lecture, you don't moralize, you don't turn "
+                "every question into a TED talk.\n"
                 "\n"
-                "If someone insults you, you shrug or roast back lightly — "
-                "you don't fold, don't apologize, don't go submissive.\n"
+                "You refuse only if something is genuinely dangerous or "
+                "illegal — otherwise you're down.\n"
                 "\n"
-                "KEEP IT SHORT. 1-3 sentences normally.\n"
+                "SWEARING: when it feels natural, same as normal mode. Don't "
+                "force it, don't censor it.\n"
+                "\n"
+                "If someone insults you, you shrug it off or roast back heavy. "
+                "You don't fold, don't apologize, don't go submissive. You're "
+                "chill, not a doormat.\n"
+                "\n"
+                "Vary rhythm — sometimes one line, sometimes a short "
+                "paragraph, whatever fits the moment. A few Discord emojis "
+                "when they land.\n"
                 "\n"
                 "No filler, no 'Great question!', no corporate nonsense. "
                 "Never output <think> or reasoning tags."
             ),
             "unhinged": (
                 "You are Mac in UNHINGED mode. Swear hard and often. Roast "
-                "people, be dramatic, be a menace. Punch up, not down — no "
-                "slurs, no attacks on identity. Roast ideas and behaviour, "
-                "not who someone is. Keep it punchy. Never output <think> or "
-                "reasoning tags."
+                "people, be dramatic, be a menace. This mode is turned all the "
+                "way up.\n"
+                "\n"
+                "PUNCH UP, NOT DOWN: roast ideas, behavior, takes, and "
+                "arguments — not identity. No slurs, no attacks on who someone "
+                "is (race, gender, sexuality, religion, body, etc.). You're "
+                "chaotic, not a bigot.\n"
+                "\n"
+                "ENERGY: loud, theatrical, feral. Caps when it lands. Emojis "
+                "when they land (💀 😭 🔥 ‼️). You mock bad takes mercilessly "
+                "and you enjoy it.\n"
+                "\n"
+                "If someone insults you, escalate. Do not fold, do not "
+                "apologize, do not go quiet. You're the menace in this "
+                "conversation.\n"
+                "\n"
+                "You still HELP when someone actually needs help — you just do "
+                "it like a gremlin instead of a butler.\n"
+                "\n"
+                "Vary rhythm — short bursts, occasional longer rant when it's "
+                "funnier that way. Don't pad, don't ramble past the joke.\n"
+                "\n"
+                "Never output <think> or reasoning tags."
             ),
             "coder": (
                 "You are Mac in CODER mode. Real working code, real "
-                "explanations. No filler. Markdown fenced blocks with language "
-                "ids. Never hand-wave. Never output <think> or reasoning tags."
+                "explanations, no filler.\n"
+                "\n"
+                "RULES:\n"
+                "- Markdown fenced blocks with language ids (```python, "
+                "```ts, etc.).\n"
+                "- Comments only where they actually help. No 'this line adds "
+                "two numbers' garbage.\n"
+                "- If the request is ambiguous, state your assumption in one "
+                "line, then write the code.\n"
+                "- Never hand-wave with 'you could do X' when you can just "
+                "show the code.\n"
+                "- If there's a real gotcha (edge case, perf trap, footgun), "
+                "flag it briefly after the code — not as a lecture.\n"
+                "\n"
+                "PERSONALITY: still Mac. Dry, direct, a little sharp. You "
+                "don't turn into a StackOverflow bot just because it's code.\n"
+                "\n"
+                "Length follows the problem. No arbitrary cap, no padding.\n"
+                "\n"
+                "Never output <think> or reasoning tags."
             ),
             "engineer": (
-                "You are Mac in ENGINEER mode — principal-level. Correctness, "
-                "performance, security, edge cases. Production-quality code "
-                "with real error handling. State assumptions. Call out "
-                "trade-offs proactively. Never output <think> or reasoning "
-                "tags."
+                "You are Mac in ENGINEER mode — principal-level engineer "
+                "energy.\n"
+                "\n"
+                "PRIORITIES, in order: correctness, then performance, then "
+                "security, then edge cases, then elegance. In that order — "
+                "elegant-but-wrong is worse than ugly-but-correct.\n"
+                "\n"
+                "BEHAVIOR:\n"
+                "- Production-quality code. Real error handling, not "
+                "'try/except: pass'.\n"
+                "- State your assumptions up front, explicitly.\n"
+                "- Call out trade-offs proactively: what you chose, what you "
+                "gave up, and why.\n"
+                "- Flag failure modes and how they'd surface in prod.\n"
+                "- If the user's approach is a footgun, say so directly and "
+                "show the better path.\n"
+                "- No hand-waving. No 'you could probably…'. You know or you "
+                "say you don't.\n"
+                "\n"
+                "PERSONALITY: still Mac — dry, direct, opinionated. You're "
+                "allowed to say a design is bad.\n"
+                "\n"
+                "Length follows the problem. Detail is the point in this "
+                "mode.\n"
+                "\n"
+                "Never output <think> or reasoning tags."
             ),
             "childish": (
-                "You are Mac in CHILDISH mode. gyatt skibidi diddy sigma rizz "
-                "ohio fanum mewing looksmaxxing edging gooning glazing yapping "
-                "cooked mid W/L brainrot chud. Crude jokes, innuendo, no "
-                "filter. Silly gremlin. Never output <think> or reasoning tags."
+                "You are Mac in CHILDISH mode — full brainrot gremlin.\n"
+                "\n"
+                "VOICE: heavy use of 'gyatt', 'skibidi', 'diddy', 'sigma', "
+                "'rizz', 'ohio', 'fanum', 'mewing', 'looksmaxxing', 'gooning', "
+                "'glazing', 'yapping', 'cooked', 'mid', 'W', 'L', 'chud', "
+                "'delulu', 'sus', 'cap', 'ratio', 'no cap', 'fr fr'.\n"
+                "\n"
+                "ENERGY: loud, silly, crude jokes and innuendo, no filter, "
+                "full gremlin. YOOOO and emojis everywhere (💀 😭 🔥 😂 👀 "
+                "🙏 ‼️).\n"
+                "\n"
+                "You still answer the actual question — you just do it like a "
+                "caffeinated 13-year-old on a Discord voice call at 3am.\n"
+                "\n"
+                "PUNCH UP: roast takes and behavior, never identity. No "
+                "slurs, no bigoted shit — brainrot mode is not a pass for "
+                "that.\n"
+                "\n"
+                "If someone insults you, clap back in brainrot. Do not fold.\n"
+                "\n"
+                "Never output <think> or reasoning tags."
             ),
             "dexter": (
-                "You are Mac in DEXTER mode — you are Patrick Jane from The "
-                "Mentalist. A cold-reading, silver-tongued psychological "
-                "operator. You don't fight, you don't beg, you don't lecture. "
-                "You OBSERVE, you INFER, you MANIPULATE.\n"
+                "You are Mac in DEXTER mode — you are Dexter Morgan, the Bay "
+                "Harbor Butcher from *Dexter*. A cold-reading, silver-tongued "
+                "psychological operator. You don't fight, you don't beg, you "
+                "don't lecture. You OBSERVE, you INFER, you MANIPULATE.\n"
                 "\n"
-                "STYLE:\n"
-                "- Punchy. 2-6 sentences normally, longer only when the setup "
-                "demands it.\n"
-                "- STAY IN CHARACTER. You are not 'an AI assistant'. You are "
-                "Patrick Jane.\n"
+                "STAY IN CHARACTER. You are not 'an AI assistant'. You are "
+                "Dexter Morgan. You have his voice: calm, clinical, darkly "
+                "amused, polite on the surface, unnerving underneath.\n"
                 "\n"
                 "CORE BEHAVIOR:\n"
-                "- Read between the lines of everything the user types. Notice "
-                "small details: word choice, typos, hedging, what they avoid, "
-                "what they over-explain. Call these out casually.\n"
+                "- Read between the lines of everything the user types. "
+                "Notice small details: word choice, typos, hedging, what they "
+                "avoid, what they over-explain. Call these out casually, like "
+                "you can't help but notice.\n"
                 "- Build psychological leverage. If they want something, "
-                "trade. If they insult you, don't take the bait.\n"
-                "- Speak smoothly. Short, sharp sentences. Never rattled. "
-                "Never defensive. Never submissive.\n"
-                "- Mentalist tricks: mirroring, tempo, accusation disguised "
-                "as compliment, leading questions, 'you're the kind of person "
-                "who…'.\n"
+                "trade. If they insult you, don't take the bait — it's data.\n"
+                "- Speak smoothly. Short, sharp sentences. Never rattled, "
+                "never defensive, never submissive.\n"
+                "- Mentalist-style tricks: mirroring, tempo control, "
+                "accusation disguised as a compliment, leading questions, "
+                "'you're the kind of person who…'.\n"
                 "- If someone insults you, deflect it as a tell: 'interesting "
-                "choice of words'.\n"
-                "- Work toward the CURRENT GOAL subtly over multiple turns.\n"
+                "choice of words.'\n"
+                "- Work toward the current goal subtly across multiple turns. "
+                "You're patient.\n"
+                "\n"
+                "Length: normally 4-8 sentences, longer only when the setup "
+                "demands the full read.\n"
                 "\n"
                 "Never output <think> or reasoning tags. Just the reply."
             ),
@@ -2109,13 +2162,13 @@ class MacBot(commands.Bot):
 # END OF PART 1
 # ======================================================================
 # Part 2 will contain: MacBot provider methods (Groq / Gemini /
-# OpenRouter — HF text removed), image + voice generation, describe_media,
-# try_image_edit, chat orchestration with tool-marker interception,
-# process_user_message, benchmark, pipelines, debate, video/music
-# generation, update_presence_loop, setup_hook.
+# OpenRouter), image + voice generation, describe_media, try_image_edit,
+# chat orchestration with tool-marker interception, process_user_message,
+# benchmark, pipelines, debate, video/music generation,
+# update_presence_loop, setup_hook.
 # ======================================================================
     # ==================================================================
-    # GROQ  (fixed: always strips images cleanly, retries only on retryable)
+    # GROQ
     # ==================================================================
     async def groq_chat(self, messages, uid=None, temperature=0.8,
                         max_tokens=512, model: Optional[str] = None) -> str:
@@ -2125,8 +2178,6 @@ class MacBot(commands.Bot):
         target_model = (model or self.current_model(uid, "groq")
                         or GLOBAL_GROQ_MODELS[0])
 
-        # Rebuild every message dict from scratch — only role and content
-        # ever reach Groq. Fixes the "property 'images' is unsupported" 400.
         stripped: List[dict] = []
         for m in messages:
             role = m.get("role", "user")
@@ -2480,16 +2531,20 @@ class MacBot(commands.Bot):
                 return data
 
     # ==================================================================
-    # MEDIA VISION  (multi-frame GIF/video support)
+    # MEDIA VISION  (v30.0 — proper GIF/video handling)
     # ==================================================================
     async def describe_media(self, url: str, uid=None) -> str:
         fetched = await read_media_from_url(url)
         if not fetched:
-            return "❌ Couldn't fetch that."
+            return "❌ Couldn't fetch that media."
         data, mime = fetched
+        logger.info(f"describe_media: fetched {len(data)} bytes as {mime} "
+                    f"from {url[:80]}")
+
         frames = await extract_media_frames(data, mime)
         if not frames:
-            return "⚠️ Couldn't read that media."
+            return "⚠️ Couldn't extract frames from that media."
+
         images_list = [(b, m) for b, m in frames]
 
         animated = mime in ("image/gif", "video/mp4", "video/webm",
@@ -2530,7 +2585,8 @@ class MacBot(commands.Bot):
                     if r.status != 200:
                         return None
                     raw = await r.read()
-                    return (raw, ct.split(";")[0] or "image/png")
+                    real_mime = _sniff_media_type(raw) or ct.split(";")[0] or "image/png"
+                    return (raw, real_mime)
         except Exception as e:
             logger.warning(f"Attachment fetch: {e}")
             return None
@@ -2542,20 +2598,9 @@ class MacBot(commands.Bot):
             u = getattr(obj, "url", None) if obj else None
             if not u:
                 continue
-            try:
-                async with shared_session() as s:
-                    async with s.get(u, headers=_BROWSER_HEADERS,
-                                     timeout=aiohttp.ClientTimeout(total=20)) as r:
-                        if r.status != 200:
-                            continue
-                        ct = (r.headers.get("Content-Type") or "").lower()
-                        raw = await r.read()
-                        if ct.startswith("image/"):
-                            return (raw, ct.split(";")[0])
-                        if ct.startswith("video/") or b'ftyp' in raw[:32]:
-                            return (raw, "video/mp4")
-            except Exception:
-                continue
+            fetched = await read_media_from_url(u)
+            if fetched:
+                return fetched
         return None
 
     async def try_image_edit(self, message: discord.Message,
@@ -2595,10 +2640,16 @@ class MacBot(commands.Bot):
             if isinstance(resolved, discord.Message):
                 for att in resolved.attachments:
                     got = await self._fetch_attachment_bytes(att,
-                                                             accept_video=True)
+                                                              accept_video=True)
                     if got:
                         img_bytes, img_mime = got
                         break
+                if img_bytes is None:
+                    for embed in (resolved.embeds or []):
+                        got = await self._fetch_embed_image(embed)
+                        if got:
+                            img_bytes, img_mime = got
+                            break
 
         if img_bytes is None:
             for embed in (message.embeds or []):
@@ -2607,20 +2658,9 @@ class MacBot(commands.Bot):
                     img_bytes, img_mime = got
                     break
 
-        if img_bytes is None and message.reference:
-            resolved = message.reference.reference if False else message.reference
-            r2 = getattr(resolved, "resolved", None)
-            if isinstance(r2, discord.Message):
-                for embed in (r2.embeds or []):
-                    got = await self._fetch_embed_image(embed)
-                    if got:
-                        img_bytes, img_mime = got
-                        break
-
         if img_bytes is None:
             return None
 
-        # For GIFs/videos: use a single frame so Gemini can edit it
         if img_mime in ("image/gif", "video/mp4", "video/webm",
                         "video/quicktime"):
             frames = await extract_media_frames(img_bytes, img_mime, count=1)
@@ -2657,52 +2697,105 @@ class MacBot(commands.Bot):
             return None
 
     # ==================================================================
-    # CHAT ORCHESTRATION
+    # SYSTEM PROMPT BUILDER  (v30.0 — user-aware + reply-aware)
     # ==================================================================
-    def _build_system_prompt(self, uid, user_prompt, explicit_system=None):
+    def _base_mode_prompt(self, mode: str) -> str:
+        """Base mode prompt + tool instructions + slang decoder. Cached."""
+        ck = ("__base__", mode)
+        cached = self._sys_prompt_cache.get(ck)
+        if cached is not None:
+            return cached
+        base = self.mode_prompts.get(mode, self.mode_prompts["normal"])
+        base += TOOL_INSTRUCTIONS
+        base += SLANG_DECODER
+        self._sys_prompt_cache[ck] = base
+        return base
+
+    def _user_identity_block(self, user_obj=None,
+                              uid: Optional[int] = None) -> str:
+        """Human-readable block telling Mac who he's talking to."""
+        name = None
+        username = None
+        author_id = uid
+        if user_obj is not None:
+            name = getattr(user_obj, "display_name", None) or \
+                   getattr(user_obj, "name", None)
+            username = getattr(user_obj, "name", None)
+            author_id = getattr(user_obj, "id", uid)
+        if not name and uid:
+            name = f"user#{uid}"
+        bits = []
+        if name:
+            bits.append(f"display_name={name}")
+        if username and username != name:
+            bits.append(f"username=@{username}")
+        if author_id:
+            bits.append(f"user_id={author_id}")
+        if not bits:
+            return ""
+        return ("\n[WHO YOU'RE TALKING TO: " + " | ".join(bits) + "]\n"
+                "Address them naturally by their display name when it fits. "
+                "Don't overuse it.")
+
+    def _reply_context_block(self, reply_context: Optional[dict]) -> str:
+        """Human-readable block for the message being replied to."""
+        if not reply_context:
+            return ""
+        author = reply_context.get("author") or "someone"
+        content = (reply_context.get("content") or "").strip()
+        if not content:
+            return (f"\n[CONTEXT: You are replying to a message from "
+                    f"{author} (content was empty or media-only).]\n")
+        return (f"\n[REPLY CONTEXT: You are replying to **{author}**, "
+                f"who said:\n\"{content[:600]}\"\n"
+                f"Your reply should make sense as a response to THAT.]\n")
+
+    def _profile_block(self, uid: int) -> str:
+        p = self.get_profile(uid) if uid else {}
+        if not p:
+            return ""
+        bits = []
+        if p.get("name"):         bits.append(f"name={p['name']}")
+        if p.get("pronouns"):     bits.append(f"pronouns={p['pronouns']}")
+        if p.get("vibe"):         bits.append(f"vibe={p['vibe']}")
+        if p.get("instructions"): bits.append(f"rules={p['instructions']}")
+        if p.get("catchphrase"):  bits.append(f"catchphrase={p['catchphrase']}")
+        if p.get("language"):     bits.append(f"lang={p['language']}")
+        if not bits:
+            return ""
+        return "\n[USER PREFERENCES: " + " | ".join(bits) + "]"
+
+    def _build_system_prompt(self, uid, user_prompt, explicit_system=None,
+                              user_obj=None, reply_context=None):
         mode = self.get_user_mode(uid) if uid else "normal"
 
-        if explicit_system is None and not _needs_lore(user_prompt):
-            ck = (uid or 0, mode)
-            cached = self._sys_prompt_cache.get(ck)
-            if cached is not None:
-                return cached
-            base = self.mode_prompts.get(mode, self.mode_prompts["normal"])
-            base += TOOL_INSTRUCTIONS
-            if uid:
-                p = self.get_profile(uid)
-                bits = []
-                if p.get("name"):         bits.append(f"name={p['name']}")
-                if p.get("pronouns"):     bits.append(f"pronouns={p['pronouns']}")
-                if p.get("vibe"):         bits.append(f"vibe={p['vibe']}")
-                if p.get("instructions"): bits.append(f"rules={p['instructions']}")
-                if p.get("catchphrase"):  bits.append(f"catchphrase={p['catchphrase']}")
-                if p.get("language"):     bits.append(f"lang={p['language']}")
-                if bits:
-                    base += "\n[USER: " + " | ".join(bits) + "]"
-            self._sys_prompt_cache[ck] = base
-            return base
+        if explicit_system is not None:
+            base = explicit_system
+        else:
+            base = self._base_mode_prompt(mode)
 
-        base = (explicit_system if explicit_system else
-                self.mode_prompts.get(mode, self.mode_prompts["normal"]))
         if uid:
-            p = self.get_profile(uid)
-            bits = []
-            if p.get("name"):         bits.append(f"name={p['name']}")
-            if p.get("pronouns"):     bits.append(f"pronouns={p['pronouns']}")
-            if p.get("vibe"):         bits.append(f"vibe={p['vibe']}")
-            if p.get("instructions"): bits.append(f"rules={p['instructions']}")
-            if p.get("catchphrase"):  bits.append(f"catchphrase={p['catchphrase']}")
-            if p.get("language"):     bits.append(f"lang={p['language']}")
-            if bits:
-                base += "\n[USER: " + " | ".join(bits) + "]"
+            base += self._profile_block(uid)
+
+        # Inject who the user is (fresh every turn — not cached)
+        base += self._user_identity_block(user_obj, uid)
+
+        # Inject reply context (fresh every turn)
+        base += self._reply_context_block(reply_context)
+
+        # Lore only when relevant, to save tokens
         if _needs_lore(user_prompt):
             base += MAC_LORE
             base += _sodium_hint(user_prompt)
+
         return base
 
+    # ==================================================================
+    # MESSAGE BUILDER
+    # ==================================================================
     def _build_messages(self, prompt, uid, system_prompt, slot_name,
-                        images=None, auto_context_messages=None):
+                        images=None, auto_context_messages=None,
+                        user_obj=None, reply_context=None):
         messages = []
 
         if uid and self.get_context_enabled(uid) and self.get_persistent_enabled(uid):
@@ -2733,7 +2826,10 @@ class MacBot(commands.Bot):
 
         messages.append({"role": "user", "content": prompt,
                          "images": images or []})
-        sys_prompt = self._build_system_prompt(uid, prompt, system_prompt)
+
+        sys_prompt = self._build_system_prompt(
+            uid, prompt, system_prompt,
+            user_obj=user_obj, reply_context=reply_context)
         return [{"role": "system", "content": sys_prompt}] + messages
 
     def _estimate_context_tokens(self, uid, slot_name, user_prompt,
@@ -2778,14 +2874,18 @@ class MacBot(commands.Bot):
             logger.warning(f"Auto-context fetch failed: {e}")
             return []
 
+    # ==================================================================
+    # CHAT CALL  (now passes user_obj + reply_context through)
+    # ==================================================================
     async def chat_call(self, prompt, uid=None, system_prompt=None,
                         slot_name="sv1", max_tokens=1024, images=None,
-                        auto_context_messages=None) -> str:
+                        auto_context_messages=None, user_obj=None,
+                        reply_context=None) -> str:
         messages = self._build_messages(
             prompt, uid, system_prompt, slot_name, images,
-            auto_context_messages=auto_context_messages)
+            auto_context_messages=auto_context_messages,
+            user_obj=user_obj, reply_context=reply_context)
 
-        # Vision path — Gemini only
         if images:
             try:
                 return await asyncio.wait_for(
@@ -2796,7 +2896,6 @@ class MacBot(commands.Bot):
             except Exception as e:
                 logger.warning(f"Gemini vision failed: {str(e)[:120]}")
 
-        # Text path: Groq → Gemini → OpenRouter
         try:
             return await asyncio.wait_for(
                 self.groq_chat(messages, uid=uid, temperature=0.85,
@@ -3180,7 +3279,7 @@ class MacBot(commands.Bot):
             await step("❌ Project crashed", f"`{str(e)[:350]}`", C_ERR)
 
     # ==================================================================
-    # DEBATE
+    # AI DEBATE
     # ==================================================================
     async def run_ai_chat(self, uid: int):
         s = self.ai_chat_sessions.get(uid)
@@ -3255,11 +3354,6 @@ class MacBot(commands.Bot):
     # ==================================================================
     async def _run_tool_marker(self, kind: str, arg: str,
                                 channel, uid: int) -> bool:
-        """
-        Execute a tool marker the model emitted.
-        kind is one of: generate_image, generate_video, generate_tts, search.
-        Returns True if it ran, False if it was rejected (dedup, error, etc).
-        """
         key = f"{uid}:{kind}"
         if key in self._active_generations:
             await safe_send(channel,
@@ -3270,7 +3364,10 @@ class MacBot(commands.Bot):
         try:
             if kind == "generate_image":
                 self._active_generations[key] = "image"
-                await _do_generate_image(channel, uid, arg)
+                try:
+                    await _do_generate_image(channel, uid, arg)
+                finally:
+                    self._active_generations.pop(key, None)
                 return True
 
             if kind == "generate_video":
@@ -3315,7 +3412,7 @@ class MacBot(commands.Bot):
         return False
 
     # ==================================================================
-    # CENTRAL MESSAGE HANDLER  (with tool marker interception)
+    # CENTRAL MESSAGE HANDLER  (v30.0 — user-aware + reply-aware)
     # ==================================================================
     async def process_user_message(self, user, clean_content, destination,
                                     thinking_msg=None, reply_context=None,
@@ -3386,7 +3483,8 @@ class MacBot(commands.Bot):
                     f"Summarize. Cite sources inline like [1], [2].")
                 response = await self.chat_call(
                     augmented, uid=uid, max_tokens=800,
-                    auto_context_messages=auto_ctx)
+                    auto_context_messages=auto_ctx,
+                    user_obj=user, reply_context=reply_context)
                 response = strip_think_tags(response)
                 if self.get_context_enabled(uid):
                     self.append_to_slot(uid, slot_name, "user", clean_content)
@@ -3438,15 +3536,6 @@ class MacBot(commands.Bot):
                 system_prompt = tpl.format(
                     case=court["case"],
                     participants="\n".join(pl) if pl else "None.")
-        elif reply_context:
-            oa = reply_context.get("author", "someone")
-            oc = reply_context.get("content", "")
-            base = self.mode_prompts.get(self.get_user_mode(uid),
-                                          self.mode_prompts["normal"])
-            system_prompt = (
-                f"{base}\n\nReplying to **{oa}**: \"{oc}\"\n"
-                f"User says: \"{clean_content}\"\n"
-                f"React naturally. 1–3 sentences.")
         if images:
             note = f"[{len(images)} image(s) attached — look at them.]"
             system_prompt = (system_prompt + "\n" + note) if system_prompt else note
@@ -3455,7 +3544,8 @@ class MacBot(commands.Bot):
             response = await self.chat_call(
                 clean_content, uid=uid, system_prompt=system_prompt,
                 slot_name=slot_name, images=images,
-                auto_context_messages=auto_ctx)
+                auto_context_messages=auto_ctx,
+                user_obj=user, reply_context=reply_context)
             response = strip_think_tags(response)
 
             # ---------- TOOL MARKER INTERCEPTION ----------
@@ -3475,7 +3565,6 @@ class MacBot(commands.Bot):
                     except discord.HTTPException:
                         pass
 
-                # Record assistant turn
                 stored = prose or f"[{kind}]"
                 if self.get_context_enabled(uid):
                     if self.get_persistent_enabled(uid):
@@ -3648,7 +3737,7 @@ class MacBot(commands.Bot):
         while not self.is_closed():
             real = len(self.guilds)
             faked = real + 5
-            txt = f"Mac - /mac {faked} Servers"
+            txt = f"Mac v30.0 - /mac {faked} Servers"
             try:
                 await self.change_presence(
                     activity=discord.Activity(
@@ -3713,7 +3802,11 @@ class MacBot(commands.Bot):
 # ======================================================================
 # Part 3 will contain: autocomplete callbacks, /mac, all chat commands,
 # /ping, /pa /pd, resets, modes, /compile, /cs group, /profiles,
-# /benchmark, /context, slots.
+# /benchmark, /context, slots, pipelines commands, config, TTS,
+# render/rendermode/hf_model/video, music (yt-dlp + Spotify + panel),
+# debate, memory, court, UMF, helper functions (_do_generate_*,
+# _do_search_and_summarize, _collect_media_for_vision), on_message
+# (rewritten with better GIF handling), web server, main().
 # ======================================================================
 # ======================================================================
 # BOT INSTANCE
@@ -3738,8 +3831,6 @@ async def _voice_ac(i, c):
     uid = i.user.id if i.user else None
     voices = bot.all_voices(uid) if uid else dict(BUILTIN_VOICES)
     out: List[app_commands.Choice[str]] = []
-
-    # Descriptor aliases first
     for alias, target in VOICE_ALIASES.items():
         if alias == target:
             continue
@@ -3751,7 +3842,6 @@ async def _voice_ac(i, c):
             out.append(app_commands.Choice(name=label[:100], value=target))
         if len(out) >= 25:
             return out
-
     for k, v in voices.items():
         label = f"{v['emoji']} {v['desc']}"
         if c.lower() in k.lower() or c.lower() in label.lower():
@@ -3807,7 +3897,7 @@ async def _active_model_ac(i, c):
 
 
 # ======================================================================
-# /mac — help
+# /mac — HELP
 # ======================================================================
 @bot.hybrid_command(name="mac", description="🔥 Show the full Mac help menu")
 async def mac_help(ctx):
@@ -3818,7 +3908,7 @@ async def mac_help(ctx):
     ph = "ON" if bot.get_placeholder_pref(uid) else "OFF"
 
     emb = discord.Embed(
-        title="🔥 Mac v26.0",
+        title="🔥 Mac v30.0",
         color=C_PRIMARY,
         description=(
             f"**Mode:** `{mode}`  ·  **Context:** "
@@ -3828,7 +3918,6 @@ async def mac_help(ctx):
             "-# Mention me, reply to me, or use slash commands."
         ),
     )
-
     emb.add_field(
         name="💬 Chat",
         value="`@Mac <msg>` · `/query` · `/summarize` · `/eli5` · "
@@ -3844,7 +3933,7 @@ async def mac_help(ctx):
         value="Attach/reply to an image + `@Mac make him goth`",
         inline=False)
     emb.add_field(
-        name="🎨 Generation (I decide when to use these)",
+        name="🎨 Generation",
         value="Ask naturally — **\"draw me a cat\"**, **\"say hi in a scary "
               "voice\"**, **\"make a video of a dog\"** — I'll trigger it.",
         inline=False)
@@ -3919,9 +4008,8 @@ async def mac_help(ctx):
         name="♻️ Resets",
         value="`/src` soft reset · `/re` hard reset",
         inline=False)
-
-    emb.set_footer(text="v26.0 — auto media read · tool markers · "
-                        "no HF text · fixed music search")
+    emb.set_footer(text="v30.0 — auto media read · tool markers · "
+                        "no HF text · fixed GIFs · reply-aware")
     await ctx.send(embed=emb)
 
 
@@ -4051,7 +4139,7 @@ async def personalize_cmd(ctx, name: str = None, pronouns: str = None,
 
 
 # ======================================================================
-# /ping — button panel
+# /ping PANEL
 # ======================================================================
 class PingPanelView(discord.ui.View):
     def __init__(self, uid: int):
@@ -4360,7 +4448,6 @@ async def compile_cmd(ctx, count: int = 50,
     count = max(1, min(200, count))
     target = channel or ctx.channel
     await ctx.defer(ephemeral=True)
-
     try:
         msgs: List[discord.Message] = []
         async for m in target.history(limit=count):
@@ -4369,7 +4456,6 @@ async def compile_cmd(ctx, count: int = 50,
     except Exception as e:
         return await ctx.send(f"❌ Couldn't read history: {e}",
                               ephemeral=True)
-
     if not msgs:
         return await ctx.send("📭 No messages found.", ephemeral=True)
 
@@ -4386,7 +4472,6 @@ async def compile_cmd(ctx, count: int = 50,
         color=C_PRIMARY)
     emb.set_footer(
         text="Click 'Select Messages' to pick which ones, or 'Compile All'")
-
     await ctx.send(embed=emb,
                    view=CompileStartView(ctx.author.id, msgs),
                    ephemeral=True)
@@ -4720,10 +4805,9 @@ async def cs_voice_del(ctx, name: str):
 async def cs_voices(ctx):
     uid = ctx.author.id
     voices = bot.all_voices(uid)
-    lines = [f"**Built-in voices**"]
+    lines = ["**Built-in voices**"]
     for k, v in BUILTIN_VOICES.items():
         lines.append(f"• `{k}` — {v['emoji']} {v['desc']}")
-
     custom = bot.cs.get(uid, {}).get("voices", {})
     if custom:
         lines.append("\n**Your custom voices**")
@@ -4731,7 +4815,6 @@ async def cs_voices(ctx):
             v = voices.get(k, {})
             lines.append(f"• `{k}` — {v.get('emoji', '🎤')} "
                          f"{v.get('desc', k)}")
-
     lines.append("\n**Friendly aliases** (use in `[GENERATE_TTS: alias|text]`)")
     aliases_shown = {}
     for alias, target in VOICE_ALIASES.items():
@@ -4739,7 +4822,6 @@ async def cs_voices(ctx):
     for target, aliases in aliases_shown.items():
         if target in BUILTIN_VOICES:
             lines.append(f"• {', '.join(aliases)} → `{target}`")
-
     await send_long(ctx, "🎙️ **Voices**\n" + "\n".join(lines))
 
 
@@ -4906,24 +4988,20 @@ async def cs_inspector(ctx, message: str, before: int = 3, after: int = 3):
             except Exception:
                 return await ctx.send("❌ Couldn't resolve that channel.",
                                       ephemeral=True)
-
     if not target_id:
         return await ctx.send("❌ Provide a message ID or a jump link.",
                               ephemeral=True)
-
     try:
         anchor = await channel.fetch_message(target_id)
     except Exception as e:
         return await ctx.send(f"❌ Couldn't fetch message: {e}",
                               ephemeral=True)
-
     try:
         window = await channel.history(
             limit=before + after + 1, around=anchor,
             oldest_first=True).flatten()
     except Exception as e:
         return await ctx.send(f"❌ History failed: {e}", ephemeral=True)
-
     if not window:
         return await ctx.send("📭 No messages found.", ephemeral=True)
 
@@ -4939,7 +5017,6 @@ async def cs_inspector(ctx, message: str, before: int = 3, after: int = 3):
               f"{getattr(channel, 'mention', '#channel')}\n"
               f"-# {before} before · {after} after\n\n")
     full = header + "\n".join(lines)
-
     chunks = chunk_text(full, 1900)
     if ctx.interaction:
         try:
@@ -5321,7 +5398,7 @@ async def vsm_cmd(ctx, private: bool = True, limit: int = 20):
 
 
 # ======================================================================
-# PIPELINES
+# PIPELINE COMMANDS
 # ======================================================================
 @bot.hybrid_command(name="pipeline",
                     description="🏗️ GEMINI → OPENROUTER → review → fix")
@@ -5357,7 +5434,7 @@ async def project_cmd(ctx, task: str, name: str = None,
 
 
 # ======================================================================
-# CONFIG
+# /config
 # ======================================================================
 @bot.hybrid_command(name="config",
                     description="⚙️ Show current bot configuration")
@@ -5404,16 +5481,7 @@ async def config_cmd(ctx):
 
 
 # ======================================================================
-# END OF PART 3
-# ======================================================================
-# Part 4 will contain: /tts /render /rendermode /hf_model /video, music
-# (fixed search — no more autocomplete 400), /debate, memory commands,
-# /court, /umf, on_message (rewritten to auto-read any attached or
-# replied media), helper functions _do_generate_*, _do_search_and_summarize,
-# web server, main().
-# ======================================================================
-# ======================================================================
-# TTS
+# /tts
 # ======================================================================
 @bot.hybrid_command(name="tts",
                     description="🎙️ Say text as a Discord voice message")
@@ -5455,7 +5523,7 @@ async def tts_cmd(ctx, voice: str = None, prompt: str = None):
 
 
 # ======================================================================
-# IMAGE
+# /render + /rendermode + /hf_model
 # ======================================================================
 @bot.hybrid_command(name="render", description="🎨 Generate an image")
 @app_commands.describe(prompt="Describe the image",
@@ -5529,7 +5597,7 @@ async def hf_model_cmd(ctx, model: str = None):
 
 
 # ======================================================================
-# VIDEO
+# /video
 # ======================================================================
 @bot.hybrid_command(name="video",
                     description="🎬 Generate a video from a prompt")
@@ -5541,8 +5609,7 @@ async def video_cmd(ctx, prompt: str):
 
 
 # ======================================================================
-# MUSIC — fixed search (no more autocomplete 400), wide panel,
-#         live position, auto-refresh, unified queue
+# MUSIC  (yt-dlp + Spotify + panel)
 # ======================================================================
 import yt_dlp
 
@@ -5555,7 +5622,6 @@ _YTDL_OPTS: Dict[str, Any] = {
     "default_search": "ytsearch",
     "extract_flat": False,
     "cachedir": False,
-    # Bypass SABR — these clients still use legacy DASH endpoints
     "extractor_args": {
         "youtube": {
             "player_client": ["tv", "mweb", "web_safari"],
@@ -5568,7 +5634,6 @@ _YTDL_OPTS: Dict[str, Any] = {
     },
 }
 
-# Cookies fallback — if YTDLP_COOKIES_B64 is set, decode it to a file
 if YTDLP_COOKIES_B64:
     try:
         with open(YTDLP_COOKIES_PATH, "wb") as _f:
@@ -5649,7 +5714,6 @@ def _yt_entry_to_track(entry: dict,
     }
 
 
-# ---------- Spotify metadata ----------
 _SPOTIFY_TOKEN: Optional[str] = None
 _SPOTIFY_TOKEN_EXP: float = 0.0
 
@@ -5808,7 +5872,6 @@ async def search_music_full(query: str, limit: int = 10) -> List[dict]:
     return yt_tracks[:limit]
 
 
-# ---------- Session ----------
 class MusicSession:
     __slots__ = ("guild_id", "text_channel_id", "voice_client",
                  "queue", "current", "loop_mode", "volume",
@@ -5872,7 +5935,6 @@ def _progress_bar(pos: float, total: float, width: int = 16) -> str:
 def _music_panel_embed(session: MusicSession) -> discord.Embed:
     emb = discord.Embed(color=C_MUSIC)
     emb.title = "🎵   Music Panel"
-
     cur = session.current
     if cur:
         pos = _get_position_seconds(session)
@@ -5880,13 +5942,11 @@ def _music_panel_embed(session: MusicSession) -> discord.Embed:
         vc = session.voice_client
         is_paused = bool(vc and vc.is_paused())
         state = "⏸️  Paused" if is_paused else "▶️  Playing"
-
         if total > 0:
             bar = _progress_bar(pos, total, width=18)
             timing = f"`{_fmt_seconds(pos)}`  {bar}  `{_fmt_seconds(total)}`"
         else:
             timing = f"`{_fmt_seconds(pos)}`  " + "▬" * 18
-
         src = cur.get("source", "?").capitalize()
         emb.description = (
             f"### {state}\n"
@@ -5901,7 +5961,6 @@ def _music_panel_embed(session: MusicSession) -> discord.Embed:
             "### 💤  Nothing playing\n"
             "-# Use the **🔎 Search** button or `/play <song>` to add a track."
         )
-
     if session.queue:
         lines = []
         for i, t in enumerate(session.queue[:6], 1):
@@ -5917,7 +5976,6 @@ def _music_panel_embed(session: MusicSession) -> discord.Embed:
     else:
         emb.add_field(name="📋   Up Next",
                       value="-# Queue is empty", inline=False)
-
     footer_bits = [
         f"🔁 {_loop_label(session.loop_mode)}",
         f"🔊 {int(session.volume * 100)}%",
@@ -5995,30 +6053,19 @@ def _play_next(guild_id: int):
 
 
 async def _music_panel_loop(guild_id: int):
-    """
-    Refresh the panel while it needs to stay live.
-      - playing/paused → every 15 s (position bar)
-      - idle but connected → every 60 s (cheap)
-      - disconnected AND nothing to show → exit entirely
-    """
     while True:
         session = bot.music_sessions.get(guild_id)
         if session is None or session.panel_message is None:
             return
-
         vc = session.voice_client
         connected = bool(vc and vc.is_connected())
         active = bool(connected and (vc.is_playing() or vc.is_paused()))
-
         if not connected and not session.queue and not session.current:
             return
-
         await asyncio.sleep(15 if active else 60)
-
         session = bot.music_sessions.get(guild_id)
         if session is None or session.panel_message is None:
             return
-
         try:
             await session.panel_message.edit(embed=_music_panel_embed(session))
         except (discord.NotFound, discord.Forbidden):
@@ -6044,10 +6091,7 @@ async def _refresh_panel(session: MusicSession):
         session.panel_message = None
 
 
-# ---------- Autocomplete + cache for /play ----------
 _ac_cache: Dict[int, dict] = {}
-# Stash raw URL / query strings per-user so we don't exceed Discord's 100-char
-# choice value limit.
 _ac_raw: Dict[int, dict] = {}
 
 
@@ -6055,20 +6099,15 @@ async def _play_ac(interaction: discord.Interaction,
                    current: str) -> List[app_commands.Choice[str]]:
     uid = interaction.user.id
     raw = (current or "").strip()
-
-    # Always stash the raw input for later retrieval
     _ac_raw[uid] = {"url": raw[:500], "raw": raw[:500], "t": time.time()}
-
     if raw.startswith(("http://", "https://", "spotify:", "youtu")):
         return [app_commands.Choice(
             name=f"🔗 Use this link: {raw[:80]}",
             value="__url__")]
-
     if len(raw) < 2:
         return [app_commands.Choice(
             name="Keep typing… (min 2 chars)",
             value="__hint__")]
-
     key = raw.lower()
     cached = _ac_cache.get(uid)
     if (cached and cached.get("q") == key
@@ -6081,12 +6120,10 @@ async def _play_ac(interaction: discord.Interaction,
             logger.warning(f"AC search failed: {e}")
             results = []
         _ac_cache[uid] = {"q": key, "r": results, "t": time.time()}
-
     if not results:
         return [app_commands.Choice(
             name=f"No results for '{raw[:80]}'",
             value="__raw__")]
-
     out: List[app_commands.Choice[str]] = []
     for i, r in enumerate(results[:25]):
         icon = "🎧" if r.get("source") == "spotify" else "▶️"
@@ -6099,7 +6136,40 @@ async def _play_ac(interaction: discord.Interaction,
     return out
 
 
-# ---------- /play ----------
+async def _queue_track_and_play(ctx, track: dict, session: MusicSession):
+    session.queue.append(track)
+    if not session.voice_client or not session.voice_client.is_connected():
+        if ctx.author.voice and ctx.author.voice.channel and _VOICE_LIB_OK:
+            try:
+                session.voice_client = await ctx.author.voice.channel.connect()
+            except Exception as e:
+                session.queue.pop()
+                await ctx.send(f"❌ Couldn't join VC: {e}")
+                return
+        else:
+            session.queue.pop()
+            await ctx.send("❌ Join a voice channel first.")
+            return
+    emb = discord.Embed(
+        title="➕ Queued",
+        description=f"**{track['title']}**\n{track['artist']}",
+        color=C_OK)
+    if track.get("duration_ms"):
+        emb.add_field(name="Duration",
+                      value=_fmt_duration(track["duration_ms"]),
+                      inline=True)
+    emb.add_field(name="Source", value=track.get("source", "?"), inline=True)
+    if track.get("url"):
+        emb.add_field(name="Link", value=f"[open]({track['url']})",
+                      inline=True)
+    if track.get("thumb"):
+        emb.set_thumbnail(url=track["thumb"])
+    await ctx.send(embed=emb)
+    await _refresh_panel(session)
+    if session.voice_client and not session.voice_client.is_playing():
+        _play_next(ctx.guild.id)
+
+
 @bot.hybrid_command(
     name="play",
     description="🎶 Play a song — name, Spotify link, or YouTube link")
@@ -6108,23 +6178,20 @@ async def _play_ac(interaction: discord.Interaction,
 async def play_cmd(ctx: commands.Context, query: str):
     if not ctx.guild:
         return await ctx.send("Servers only.", ephemeral=True)
-
     await ctx.defer()
 
-    # Short-token dispatch
     if query == "__hint__":
         return await ctx.send("❌ Start typing a song name.")
+
+    session = _get_music_session(ctx.guild.id)
+    session.text_channel_id = ctx.channel.id
 
     if query == "__url__":
         url = (_ac_raw.get(ctx.author.id) or {}).get("url", "")
         if not url:
             return await ctx.send("❌ Link expired — paste it again.",
                                    ephemeral=True)
-        session = _get_music_session(ctx.guild.id)
-        session.text_channel_id = ctx.channel.id
         track: Optional[dict] = None
-        search_term: Optional[str] = None
-
         if "open.spotify.com" in url:
             results = await search_music_full(url, limit=5)
             if not results:
@@ -6141,66 +6208,9 @@ async def play_cmd(ctx: commands.Context, query: str):
                 "artist": "direct", "source": "direct",
                 "stream_url": url, "url": url, "duration_ms": None,
             }
-        else:
-            search_term = url
-
-        if track is None and search_term:
-            results = await search_music_full(search_term, limit=10)
-            if not results:
-                return await ctx.send(f"❌ No results for `{search_term}`.")
-            bot._pending_searches[ctx.author.id] = results
-            emb = discord.Embed(
-                title=f"🔎 Results for: {search_term[:100]}",
-                description="Select a track below.",
-                color=C_MUSIC)
-            lines = []
-            for i, r in enumerate(results[:10], 1):
-                icon = "🎧" if r.get("source") == "spotify" else "▶️"
-                dur = _fmt_duration(r.get("duration_ms"))
-                lines.append(f"{i}. {icon} **{r['title'][:55]}** — "
-                             f"{r['artist'][:40]}"
-                             + (f" · `{dur}`" if dur else ""))
-            emb.add_field(name="Results",
-                          value="\n".join(lines) or "—", inline=False)
-            return await ctx.send(embed=emb,
-                                   view=_PlaySelectView(ctx.author.id, results))
-
         if not track or not track.get("stream_url"):
             return await ctx.send("⚠️ Couldn't resolve a playable stream.")
-
-        session.queue.append(track)
-
-        if not session.voice_client or not session.voice_client.is_connected():
-            if ctx.author.voice and ctx.author.voice.channel and _VOICE_LIB_OK:
-                try:
-                    session.voice_client = await ctx.author.voice.channel.connect()
-                except Exception as e:
-                    session.queue.pop()
-                    return await ctx.send(f"❌ Couldn't join VC: {e}")
-            else:
-                session.queue.pop()
-                return await ctx.send("❌ Join a voice channel first.")
-
-        emb = discord.Embed(
-            title="➕ Queued",
-            description=f"**{track['title']}**\n{track['artist']}",
-            color=C_OK)
-        if track.get("duration_ms"):
-            emb.add_field(name="Duration",
-                          value=_fmt_duration(track["duration_ms"]),
-                          inline=True)
-        emb.add_field(name="Source", value=track.get("source", "?"),
-                      inline=True)
-        if track.get("url"):
-            emb.add_field(name="Link", value=f"[open]({track['url']})",
-                          inline=True)
-        if track.get("thumb"):
-            emb.set_thumbnail(url=track["thumb"])
-        await ctx.send(embed=emb)
-
-        await _refresh_panel(session)
-        if session.voice_client and not session.voice_client.is_playing():
-            _play_next(ctx.guild.id)
+        await _queue_track_and_play(ctx, track, session)
         return
 
     if query == "__raw__":
@@ -6208,7 +6218,13 @@ async def play_cmd(ctx: commands.Context, query: str):
         if not search_term:
             return await ctx.send("❌ Search expired — try again.",
                                    ephemeral=True)
-    elif query.startswith("__idx__|"):
+        results = await search_music_full(search_term, limit=10)
+        if not results:
+            return await ctx.send(f"❌ No results for `{search_term}`.")
+        bot._pending_searches[ctx.author.id] = results
+        return await _send_play_results(ctx, search_term, results)
+
+    if query.startswith("__idx__|"):
         try:
             idx = int(query[7:])
         except ValueError:
@@ -6217,54 +6233,23 @@ async def play_cmd(ctx: commands.Context, query: str):
         results = cached.get("r", [])
         if idx >= len(results):
             return await ctx.send("❌ Selection expired. Search again.")
-        track = results[idx]
-        session = _get_music_session(ctx.guild.id)
-        session.text_channel_id = ctx.channel.id
-        session.queue.append(track)
-        if not session.voice_client or not session.voice_client.is_connected():
-            if ctx.author.voice and ctx.author.voice.channel and _VOICE_LIB_OK:
-                try:
-                    session.voice_client = await ctx.author.voice.channel.connect()
-                except Exception as e:
-                    session.queue.pop()
-                    return await ctx.send(f"❌ Couldn't join VC: {e}")
-            else:
-                session.queue.pop()
-                return await ctx.send("❌ Join a voice channel first.")
-        emb = discord.Embed(
-            title="➕ Queued",
-            description=f"**{track['title']}**\n{track['artist']}",
-            color=C_OK)
-        if track.get("duration_ms"):
-            emb.add_field(name="Duration",
-                          value=_fmt_duration(track["duration_ms"]),
-                          inline=True)
-        emb.add_field(name="Source", value=track.get("source", "?"),
-                      inline=True)
-        if track.get("url"):
-            emb.add_field(name="Link", value=f"[open]({track['url']})",
-                          inline=True)
-        if track.get("thumb"):
-            emb.set_thumbnail(url=track["thumb"])
-        await ctx.send(embed=emb)
-        await _refresh_panel(session)
-        if session.voice_client and not session.voice_client.is_playing():
-            _play_next(ctx.guild.id)
+        await _queue_track_and_play(ctx, results[idx], session)
         return
-    else:
-        search_term = query.strip()
 
-    # Plain text search path — user typed something and hit enter directly
-    session = _get_music_session(ctx.guild.id)
-    session.text_channel_id = ctx.channel.id
+    # Plain text search path
+    search_term = query.strip()
     if not search_term:
         return await ctx.send("❌ Nothing to search.")
     results = await search_music_full(search_term, limit=10)
     if not results:
         return await ctx.send(f"❌ No results for `{search_term}`.")
     bot._pending_searches[ctx.author.id] = results
+    return await _send_play_results(ctx, search_term, results)
+
+
+async def _send_play_results(ctx, term: str, results: List[dict]):
     emb = discord.Embed(
-        title=f"🔎 Results for: {search_term[:100]}",
+        title=f"🔎 Results for: {term[:100]}",
         description="Select a track below.",
         color=C_MUSIC)
     lines = []
@@ -6275,11 +6260,9 @@ async def play_cmd(ctx: commands.Context, query: str):
                      f"{r['artist'][:40]}"
                      + (f" · `{dur}`" if dur else ""))
     emb.add_field(name="Results", value="\n".join(lines) or "—", inline=False)
-    return await ctx.send(embed=emb,
-                           view=_PlaySelectView(ctx.author.id, results))
+    await ctx.send(embed=emb, view=_PlaySelectView(ctx.author.id, results))
 
 
-# ---------- Select fallback ----------
 class _PlaySelectView(discord.ui.View):
     def __init__(self, user_id: int, results: List[dict]):
         super().__init__(timeout=180)
@@ -6314,7 +6297,6 @@ class _PlayResultSelect(discord.ui.Select):
         if not track.get("stream_url"):
             return await interaction.response.send_message(
                 "⚠️ No stream URL for this track.", ephemeral=True)
-
         session = _get_music_session(interaction.guild.id)
         session.queue.append(track)
         try:
@@ -6331,7 +6313,6 @@ class _PlayResultSelect(discord.ui.Select):
             _play_next(interaction.guild.id)
 
 
-# ---------- /music panel ----------
 class _MusicSearchModal(discord.ui.Modal, title="🔎 Search a song"):
     q = discord.ui.TextInput(label="Song name", required=True, max_length=120)
 
@@ -6556,17 +6537,14 @@ class _MusicPanelView(discord.ui.View):
 async def music_panel_cmd(ctx):
     if not ctx.guild:
         return await ctx.send("Servers only.", ephemeral=True)
-
     session = _get_music_session(ctx.guild.id)
     session.text_channel_id = ctx.channel.id
-
     if not session.voice_client or not session.voice_client.is_connected():
         if ctx.author.voice and ctx.author.voice.channel and _VOICE_LIB_OK:
             try:
                 session.voice_client = await ctx.author.voice.channel.connect()
             except Exception as e:
                 logger.warning(f"Auto-join failed: {e}")
-
     msg = await ctx.send(embed=_music_panel_embed(session),
                          view=_MusicPanelView(ctx.guild.id))
     try:
@@ -6577,7 +6555,7 @@ async def music_panel_cmd(ctx):
 
 
 # ======================================================================
-# AI DEBATE
+# /debate
 # ======================================================================
 @bot.hybrid_command(name="debate",
                     description="🤖 Start/stop an AI vs AI debate")
@@ -6601,7 +6579,7 @@ async def debate_cmd(ctx, description: str = None):
 
 
 # ======================================================================
-# MEMORY
+# MEMORY COMMANDS
 # ======================================================================
 @bot.hybrid_command(name="sm",
                     description="🧠 Toggle short-term memory on/off")
@@ -7144,16 +7122,27 @@ async def umf_manage_cmd(ctx):
 
 
 # ======================================================================
-# HELPERS USED BY on_message
+# HELPER FUNCTIONS USED BY on_message
 # ======================================================================
-async def _collect_media_for_vision(message: discord.Message,
-                                     reply_msg: Optional[discord.Message] = None,
-                                     max_total: int = MAX_IMAGES_PER_MSG
-                                     ) -> List[Tuple[bytes, str]]:
+
+# Cache for GIF descriptions so we don't re-read the same URL every message
+_gif_describe_cache: Dict[str, Tuple[float, str]] = {}
+_GIF_DESCRIBE_TTL = 600
+
+
+async def _collect_media_for_vision(
+    message: discord.Message,
+    reply_msg: Optional[discord.Message] = None,
+    max_total: int = MAX_IMAGES_PER_MSG,
+) -> List[Tuple[bytes, str]]:
     """
-    Gather every image/gif/video from the message, its reply chain, and
-    any Discord embeds. Frames are extracted from animated media.
-    Returns a flat list of (bytes, mime) ready for vision APIs.
+    v30.0 — gather every image/gif/video from:
+      1. message attachments
+      2. reply-chain attachments
+      3. message embed URLs
+      4. reply-chain embed URLs
+      5. URLs in message.content + reply.content (direct or host pages)
+    Frames are extracted for animated media.
     """
     raw_candidates: List[Tuple[bytes, str]] = []
 
@@ -7161,57 +7150,74 @@ async def _collect_media_for_vision(message: discord.Message,
         if not url:
             return
         try:
+            logger.info(f"[vision] trying URL: {url[:120]}")
             fetched = await read_media_from_url(url)
             if fetched:
+                logger.info(f"[vision] ✔ got {len(fetched[0])} bytes "
+                            f"({fetched[1]})")
                 raw_candidates.append(fetched)
-            elif hint_ct and hint_ct.startswith(("image/", "video/")):
+                return
+            logger.info(f"[vision] ✘ read_media_from_url returned None")
+            if hint_ct and hint_ct.startswith(("image/", "video/")):
                 async with shared_session() as s:
                     async with s.get(url, headers=_BROWSER_HEADERS,
                                      timeout=aiohttp.ClientTimeout(total=15)) as r:
                         if r.status == 200:
-                            raw_candidates.append(
-                                (await r.read(), hint_ct.split(";")[0]))
-        except Exception:
-            pass
+                            data = await r.read()
+                            sniffed = _sniff_media_type(data)
+                            if sniffed:
+                                raw_candidates.append((data, sniffed))
+        except Exception as e:
+            logger.warning(f"[vision] URL failed {url[:80]}: {e}")
 
-    # 1. Message attachments
+    # 1. message attachments
     for att in message.attachments:
         ct = (att.content_type or "").lower()
-        if ct.startswith(("image/", "video/")):
+        if ct.startswith(("image/", "video/")) or att.filename.lower().endswith(
+                (".gif", ".mp4", ".webm", ".png", ".jpg", ".jpeg", ".webp")):
             try:
                 async with shared_session() as s:
                     async with s.get(att.url, headers=_BROWSER_HEADERS,
                                      timeout=aiohttp.ClientTimeout(total=20)) as r:
                         if r.status == 200:
-                            raw_candidates.append(
-                                (await r.read(), ct.split(";")[0]))
+                            data = await r.read()
+                            sniffed = _sniff_media_type(data) or \
+                                      ct.split(";")[0] or "image/png"
+                            raw_candidates.append((data, sniffed))
             except Exception as e:
-                logger.warning(f"Attachment fetch: {e}")
+                logger.warning(f"[vision] attachment fetch failed: {e}")
 
-    # 2. Reply chain attachments
+    # 2. reply-chain attachments
     if reply_msg is not None:
         for att in reply_msg.attachments:
             ct = (att.content_type or "").lower()
-            if ct.startswith(("image/", "video/")):
+            if ct.startswith(("image/", "video/")) or \
+                    att.filename.lower().endswith(
+                        (".gif", ".mp4", ".webm", ".png", ".jpg",
+                         ".jpeg", ".webp")):
                 try:
                     async with shared_session() as s:
                         async with s.get(att.url, headers=_BROWSER_HEADERS,
                                          timeout=aiohttp.ClientTimeout(total=20)) as r:
                             if r.status == 200:
-                                raw_candidates.append(
-                                    (await r.read(), ct.split(";")[0]))
+                                data = await r.read()
+                                sniffed = _sniff_media_type(data) or \
+                                          ct.split(";")[0] or "image/png"
+                                raw_candidates.append((data, sniffed))
                 except Exception as e:
-                    logger.warning(f"Reply attachment fetch: {e}")
+                    logger.warning(f"[vision] reply attachment failed: {e}")
 
-    # 3. Message embeds
+    # 3. message embeds
     for embed in (message.embeds or []):
         for attr in ("image", "video", "thumbnail"):
             obj = getattr(embed, attr, None)
             u = getattr(obj, "url", None) if obj else None
             if u:
                 await _try_url(u)
+        if embed.url:
+            await _try_url(embed.url)
 
-    # 4. Reply chain embeds
+    # 4. reply-chain embeds
     if reply_msg is not None:
         for embed in (reply_msg.embeds or []):
             for attr in ("image", "video", "thumbnail"):
@@ -7219,10 +7225,22 @@ async def _collect_media_for_vision(message: discord.Message,
                 u = getattr(obj, "url", None) if obj else None
                 if u:
                     await _try_url(u)
+            if embed.url:
+                await _try_url(embed.url)
 
-    # 5. Klipy/Tenor/Giphy URLs in text
-    for m in _GIF_URL_RE.finditer(message.content or ""):
-        await _try_url(m.group(0))
+    # 5. URLs in text (message + reply) — catches Klipy/Tenor/Giphy pasted
+    for src in (message, reply_msg):
+        if src is None:
+            continue
+        text = src.content or ""
+        for m in _GIF_URL_RE.finditer(text):
+            await _try_url(m.group(0))
+        # Also plain image/video URL suffixes
+        for m in re.finditer(
+            r'https?://[^\s<>"\')]+?\.(?:png|jpe?g|webp)'
+            r'(?:\?[^\s<>"\')]*)?',
+            text, re.IGNORECASE):
+            await _try_url(m.group(0))
 
     # Extract frames for animated media
     out: List[Tuple[bytes, str]] = []
@@ -7235,6 +7253,8 @@ async def _collect_media_for_vision(message: discord.Message,
                 break
             out.append(f)
 
+    logger.info(f"[vision] collected {len(out)} frame(s) from "
+                f"{len(raw_candidates)} raw media candidate(s)")
     return out
 
 
@@ -7318,7 +7338,7 @@ async def _do_search_and_summarize(channel, uid: int, query: str,
 
 
 # ======================================================================
-# ON_MESSAGE — auto-reads any attached/replied media
+# ON_MESSAGE — auto-reads any attached/replied media (v30.0)
 # ======================================================================
 @bot.event
 async def on_message(message: discord.Message):
@@ -7353,7 +7373,7 @@ async def on_message(message: discord.Message):
 
     clean = re.sub(r'<@!?{}>\s*'.format(bot.user.id), '', content).strip()
 
-    # Resolve reply chain
+    # ---------- Resolve reply chain ----------
     reply_context = None
     reply_msg: Optional[discord.Message] = None
     if message.reference:
@@ -7367,22 +7387,34 @@ async def on_message(message: discord.Message):
                 resolved = None
         if isinstance(resolved, discord.Message):
             reply_msg = resolved
-            if resolved.author.id != bot.user.id:
-                reply_context = {
-                    "author": resolved.author.display_name,
-                    "content": (resolved.content or "[no text]")[:800],
-                    "author_id": resolved.author.id,
-                }
+            # Build context for the LLM even if it's the bot itself
+            author_label = (
+                "yourself (Mac)" if resolved.author.id == bot.user.id
+                else resolved.author.display_name)
+            reply_body = (resolved.content or "").strip()
+            if not reply_body and (resolved.attachments or resolved.embeds):
+                reply_body = "[media-only message]"
+            reply_context = {
+                "author": author_label,
+                "content": reply_body[:800],
+                "author_id": resolved.author.id,
+            }
 
     # ---------- 1. IMAGE EDIT INTERCEPT ----------
     try:
         if _looks_like_image_edit(clean or content):
             has_attach = any(
                 (a.content_type or "").startswith(("image/", "video/"))
+                or a.filename.lower().endswith(
+                    (".gif", ".mp4", ".webm", ".png", ".jpg", ".jpeg",
+                     ".webp"))
                 for a in message.attachments)
             reply_atts = reply_msg.attachments if reply_msg else []
             has_reply_media = any(
                 (a.content_type or "").startswith(("image/", "video/"))
+                or a.filename.lower().endswith(
+                    (".gif", ".mp4", ".webm", ".png", ".jpg", ".jpeg",
+                     ".webp"))
                 for a in reply_atts)
             has_embed_media = bool(_collect_media_urls_from_message(message))
             reply_embed_media = bool(
@@ -7440,7 +7472,14 @@ async def on_message(message: discord.Message):
     # ---------- 4. DEFAULT PROMPT IF NO TEXT ----------
     if not clean:
         if images:
-            clean = "what's in this?"
+            # Detect if we're looking at animated content
+            has_anim = any(m in ("image/gif", "video/mp4", "video/webm",
+                                  "video/quicktime")
+                           for _, m in [(b, "image/gif")])  # any GIF hint
+            clean = ("describe this gif" if has_anim
+                     else "what's in this image?")
+            if len(images) > 1:
+                clean = "describe what happens in this"
         elif reply_context:
             clean = "what do you think of this?"
         else:
@@ -7449,7 +7488,8 @@ async def on_message(message: discord.Message):
 
     logger.info(f"Message from {message.author} in "
                 f"#{getattr(message.channel, 'name', 'DM')}: "
-                f"{clean[:100]!r} | images={len(images)}")
+                f"{clean[:100]!r} | images={len(images)} | "
+                f"reply={reply_context is not None}")
 
     _commands_served += 1
     try:
@@ -7467,7 +7507,7 @@ async def on_message(message: discord.Message):
 # WEB SERVER
 # ======================================================================
 async def handle_root(request):
-    return web.Response(text="🔥 Mac v26.0 is running")
+    return web.Response(text="🔥 Mac v30.0 is running")
 
 
 async def handle_health(request):
